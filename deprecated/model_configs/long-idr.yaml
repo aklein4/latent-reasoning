@@ -1,0 +1,22 @@
+
+model_type: idr
+architectures: [
+    IDRLmModel
+]
+
+max_sequence_length: 1024
+
+hidden_size: 768
+mlp_size: 2048
+
+num_layers: 24
+num_attention_heads: 12
+
+use_qkv_bias: true
+hidden_act: silu
+
+initializer_range: 0.02
+layer_norm_eps: 0.00001
+
+ignore_segment_ids: true
+gradient_checkpointing: False

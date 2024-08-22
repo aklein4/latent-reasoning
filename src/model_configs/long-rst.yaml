@@ -1,0 +1,30 @@
+
+model_type: rst
+architectures: [
+    RSTLmModel
+]
+
+max_sequence_length: 1024
+
+hidden_size: 768
+mlp_size: 2048
+
+num_layers: 24
+num_attention_heads: 12
+
+use_qkv_bias: true
+hidden_act: silu
+layer_norm_eps: 0.00001
+
+use_rope: false
+rope_fraction: 1
+rope_base: 10000
+
+initializer_range: 0.02
+identity_init: false
+
+delta_rank: 16
+ssm_epsilon: 0.00001
+
+ignore_segment_ids: true
+gradient_checkpointing: true

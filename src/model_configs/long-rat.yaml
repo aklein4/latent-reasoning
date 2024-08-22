@@ -1,0 +1,30 @@
+
+model_type: rat
+architectures: [
+    RatLmModel
+]
+
+max_sequence_length: 1024
+
+hidden_size: 512
+mlp_size: 1280
+
+num_layers: 22
+num_attention_heads: 8
+
+use_qkv_bias: true
+hidden_act: silu
+layer_norm_eps: 0.00001
+
+rope_fraction: 1
+rope_base: 10000
+
+initializer_range: 0.02
+identity_init: false
+
+residual_multiplier: 4
+residual_groups: 32
+rat_norm_eps: 0.00001
+
+ignore_segment_ids: true
+gradient_checkpointing: false
