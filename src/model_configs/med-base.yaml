@@ -12,7 +12,7 @@ mlp_size: 2816
 num_layers: 24
 num_attention_heads: 16
 
-use_qkv_bias: true
+use_bias: true
 hidden_act: silu
 layer_norm_eps: 0.00001
 

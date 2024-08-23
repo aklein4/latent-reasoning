@@ -1,167 +1,159 @@
-from typing import Iterable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.utils.checkpoint import (
-    detach_variable,
-    check_backward_validity,
-)
+import numpy as np
 
-try:
-    import torch_xla.core.xla_model as xm
-except:
-    pass
-
-import inspect
-
-from utils.logging_utils import log_master_print
-import utils.constants as constants
+from transformers.activations import ACT2FN
 
 
-def _extract_tensors_from_list(inputs):
-    tensor_inputs = []
+class GaussianMixtureModule(nn.Module):
 
-    if torch.is_tensor(inputs):
-        tensor_inputs.append(inputs)
+    def __init__(self, input_dim, output_dim, n_components):
+        super().__init__()
 
-    # tensor is Iterable so we need to avoid iterating through tensor
-    elif isinstance(inputs, Iterable):
-        for input in inputs:
-            tensor_inputs += _extract_tensors_from_list(input)
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_components = n_components
 
-    return tensor_inputs
+        self.proj = nn.Linear(input_dim, self.n_components, bias=False)
 
-
-def checkpoint_barrier(inputs):
-    return
-    xm.optimization_barrier_(
-        _extract_tensors_from_list(inputs)
-    )
+        self.mu = nn.Parameter(torch.randn(self.n_components, self.output_dim))
+        self.log_sigma = nn.Parameter(torch.zeros(self.n_components, self.output_dim))
 
 
-class _FastCheckpointFunction(torch.autograd.Function):
+    def forward(self, x):
+        logpi = torch.log_softmax(self.proj(x), dim=-1)
 
-
-  @staticmethod
-  def forward(ctx, run_function, *args):
-    check_backward_validity(args)
-    ctx.run_function = run_function
-
-    # Accommodates the (remote) possibility that autocast is enabled for cpu AND gpu.
-    ctx.gpu_autocast_kwargs = {
-        "enabled": torch.is_autocast_enabled(),
-        "dtype": torch.get_autocast_gpu_dtype(),
-        "cache_enabled": torch.is_autocast_cache_enabled()
-    }
-    ctx.cpu_autocast_kwargs = {
-        "enabled": torch.is_autocast_cpu_enabled(),
-        "dtype": torch.get_autocast_cpu_dtype(),
-        "cache_enabled": torch.is_autocast_cache_enabled()
-    }
-
-    # Save non-tensor inputs in ctx, keep a placeholder None for tensors
-    # to be filled out during the backward.
-    ctx.inputs = []
-    ctx.tensor_indices = []
-    tensor_inputs = []
-    for i, arg in enumerate(args):
-      
-      if torch.is_tensor(arg):
-        tensor_inputs.append(arg)
-        ctx.tensor_indices.append(i)
-        ctx.inputs.append(None)
-
-      else:
-        ctx.inputs.append(arg)
-
-    ctx.save_for_backward(*tensor_inputs)
-
-    with torch.no_grad():
-      outputs = run_function(*args)
-
-    return outputs
-
-
-  @staticmethod
-  def backward(ctx, *args):
-    if not torch.autograd._is_checkpoint_valid():
-        raise RuntimeError(
-            "Checkpointing is not compatible with .grad() or when an `inputs` parameter"
-            " is passed to .backward(). Please use .backward() and do not pass its `inputs`"
-            " argument."
+        return GaussianMixtureDistribution(
+            logpi,
+            self.mu,
+            F.softplus(self.log_sigma)
         )
+
+
+class GaussianMixtureDistribution:
+
+    def __init__(self, logpi, mu, sigma):
+
+        self.shape = logpi.shape[:-1]
+        self.k = logpi.shape[-1]
+        self.d = mu.shape[-1]
+
+        self.logpi = logpi.view(-1, self.k) # [R, K]
+        self.mu = mu # [K, D]
+        self.sigma = sigma # [K, D]
+
     
-    # Copy the list to avoid modifying original list.
-    inputs = list(ctx.inputs)
-    tensor_indices = ctx.tensor_indices
-    tensors = ctx.saved_tensors
+    def sample(self, n_samples):
 
-    # Fill in inputs with appropriate saved tensors.
-    for i, idx in enumerate(tensor_indices):
-      inputs[idx] = tensors[i]
+        # sample from categorical distribution [n, R]
+        z = torch.distributions.Categorical(logits=self.logpi).sample((n_samples,))
+        z = z.view(-1)
+
+        # sample from gaussian distribution
+        mu = self.mu[z].view(n_samples, *self.shape, -1)
+        sigma = self.sigma[z].view(n_samples, *self.shape, -1)
+        return mu + sigma * torch.randn_like(mu)
+    
+
+    def log_prob(self, x):
+
+        n = x.shape[0]
+        x = x.view(n, -1, 1, self.d) # [n, R, 1, D]
+
+        mu_n = self.mu[None, None] # [1, 1, K, D]
+        sigma_n = self.sigma[None, None] # [1, 1, K, D]
+        logpi_n = self.logpi[None] # [1, R, K]
+
+        log_probs = -0.5 * (
+            2 * torch.log(sigma_n) +
+            np.log(2 * np.pi) +
+            ((x - mu_n) / sigma_n) ** 2
+        ) # [n, R, K, D]
+
+        log_probs = torch.sum(log_probs, dim=-1) # [n, R, K]
+        log_probs = torch.logsumexp(logpi_n + log_probs, dim=-1)
+
+        return log_probs.view(n, *self.shape)
 
 
-    # It may be more efficient to call a single optimization barrier after
-    # the model forward pass, rather than after the original layers.
-    # optimization_barrier_ is needed to separate the original forward pass with
-    # the next forward + backward pass.
-    weights = []
-    buffers = []
-    if (
-       inspect.ismethod(ctx.run_function) and
-       isinstance(ctx.run_function.__self__, torch.nn.Module)
-    ):
-        weights = list(ctx.run_function.__self__.parameters())
-        buffers = list(ctx.run_function.__self__.buffers())
-    if constants.XLA_AVAILABLE:
-        xm.optimization_barrier_(
-            _extract_tensors_from_list(
-                inputs + list(args) +
-                weights + buffers
+
+class RotaryAttention(nn.Module):
+
+    def __init__(
+        self,
+        hidden_size,
+        num_attention_heads,
+        use_rope,
+        rope_fraction,
+        max_sequence_length,
+        rope_base,
+        layer_idx):
+        super().__init__()
+
+        self.layer_idx = layer_idx
+
+        self.hidden_size = hidden_size
+        self.num_heads = num_attention_heads
+        self.head_dim = self.hidden_size // self.num_heads
+        
+        if (self.head_dim * self.num_heads) != self.hidden_size:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                f" and `num_heads`: {self.num_heads})."
             )
-        )
-
-    detached_inputs = detach_variable(tuple(inputs))
-    with torch.enable_grad(), \
-        torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs), \
-        torch.cpu.amp.autocast(**ctx.cpu_autocast_kwargs):
-            outputs = ctx.run_function(*detached_inputs)
-
-    if isinstance(outputs, torch.Tensor):
-      outputs = (outputs,)
-
-    # run backward() with only tensor that requires grad
-    outputs_with_grad = []
-    args_with_grad = []
-    for i in range(len(outputs)):
-      
-      if torch.is_tensor(outputs[i]) and outputs[i].requires_grad:
-        outputs_with_grad.append(outputs[i])
-        args_with_grad.append(args[i])
-
-    if len(outputs_with_grad) == 0:
-      raise RuntimeError(
-         "none of output has requires_grad=True, this checkpoint() is not necessary"
-        )
-    
-    torch.autograd.backward(outputs_with_grad, args_with_grad)
-    grads = tuple(
-        inp.grad if isinstance(inp, torch.Tensor) else None
-        for inp in detached_inputs
-    )
-
-    return (None,) + grads
+        
+        self.use_rope = use_rope
+        if self.use_rope:
+            self.rope = RotaryEmbedding(
+                self.head_dim, rope_fraction,
+                max_sequence_length,
+                rope_base
+            )
+        else:
+            self.rope = None
 
 
-def fast_checkpoint(function, *args):
-    """ This is an optimized version of the xla gradient checkpointing function.
-     - removes per-section optimization barriers
-        (requires a single optimization barrier after the model forward pass!)
-     - removes rng management (not needed for this project)
-    """
-    return _FastCheckpointFunction.apply(function, *args)
+    def forward(
+        self,
+        query_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask=None,
+        past_key_value=None,
+    ):
+
+        # get shapes
+        bsz, q_len, _ = query_states.shape
+
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # apply rope
+        if self.use_rope:
+            query_states, key_states = self.rope(query_states, key_states, position_ids)
+
+        # update/apply cache
+        if past_key_value is not None:
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx)
+
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3) / np.sqrt(self.head_dim))
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        # upcast attention to fp32
+        attn_weights = nn.functional.softmax(attn_weights, dtype=torch.float32, dim=-1).to(query_states.dtype)
+
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+
+        return attn_output
 
 
 class RotaryEmbedding(nn.Module):
@@ -237,4 +229,15 @@ class RotaryEmbedding(nn.Module):
         k = torch.cat((k_rot, k_no_rot), dim=-1)
 
         return q, k
+
+
+class GLU(nn.Module):
+
+    def __init__(self, activation):
+        super().__init__()
+        self.activation = ACT2FN[activation]
+    
+
+    def forward(self, gate, value):
+        return self.activation(gate) * value
     
