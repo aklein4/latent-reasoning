@@ -14,10 +14,10 @@ class XLAConfig(PretrainedConfig):
         self,
         vocab_size,
         max_sequence_length,
-        bos_token_id=0,
-        eos_token_id=0,
-        pad_token_id=0,
-        gradient_checkpointing=False,
+        bos_token_id,
+        eos_token_id,
+        pad_token_id,
+        gradient_checkpointing,
         *args,
         **kwargs,
     ):
@@ -43,15 +43,17 @@ class XLAConfig(PretrainedConfig):
         self.vocab_size = vocab_size
         self.max_sequence_length = max_sequence_length
 
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
-        self.pad_token_id = pad_token_id
-
         # requires workaround
         tmp_gradient_checkpointing = gradient_checkpointing
 
         # init with work arounds
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            *args, 
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            **kwargs
+        )
         self.gradient_checkpointing = tmp_gradient_checkpointing
 
 
