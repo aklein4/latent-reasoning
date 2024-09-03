@@ -28,7 +28,8 @@ class Seq2SeqCollator:
         except:
             input_ids = [np.array(x) for x in input_ids]
         input_ids = [torch.tensor(x.astype(np.int64)).long() for x in input_ids]
-        
+        print([len(x) for x in input_ids])
+
         # apply max length
         for i in range(len(input_ids)):
             if input_ids[i].shape[0] > self.sequence_length:

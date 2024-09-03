@@ -14,7 +14,7 @@ num_attention_heads: 2
 
 num_layers: 4
 
-use_bias: false
+use_qkv_bias: true
 hidden_act: silu
 layer_norm_eps: 0.00001
 
@@ -23,7 +23,7 @@ rope_fraction: 2
 rope_base: 10000
 
 z_size: 6
-base_gate: 0.1
-gate_init_scale: 0.05
+base_t: 0.1
+t_init_scale: 0.05
 
 gradient_checkpointing: false
