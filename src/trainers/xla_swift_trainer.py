@@ -50,7 +50,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         
         # log probs, with zero for unmasked tokens
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
-        log_probs = logits.view(-1, logits.shape(-1))[ar, x.view(-1)].view(*x.shape)
+        log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
         # kl divergence [bs,]
