@@ -39,7 +39,8 @@ class FusedLinear(nn.Module):
         self,
         in_feature_list,
         out_feature_list,
-        bias=True
+        bias=True,
+        contiguous=False
     ):
         super().__init__()
 
@@ -51,6 +52,7 @@ class FusedLinear(nn.Module):
         self.in_feature_list = in_feature_list
         self.out_feature_list = out_feature_list
         self.bias = bias
+        self.contiguous = contiguous
 
         self.total_in = sum(in_feature_list)
         self.total_out = sum(out_feature_list)
@@ -77,7 +79,12 @@ class FusedLinear(nn.Module):
 
         if len(self.out_feature_list) == 1:
             return x
-        return torch.split(x, self.out_feature_list, dim=-1)
+        
+        out = torch.split(x, self.out_feature_list, dim=-1)
+        if self.contiguous:
+            out = tuple(v.contiguous() for v in out)
+        
+        return out
 
 
 class RotaryAttention(nn.Module):

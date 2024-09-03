@@ -98,16 +98,27 @@ class SwiftLayer(nn.Module):
 
     def special_init(self, config):
         
-        self.O_t.weight.data.normal_(0.0, config.t_init_scale/np.sqrt(self.qkv_size))
-        if self.O_t.bias is not None:
-            self.O_t.bias.data.zero_()
-
-        self.mlp_down_t.weight.data.normal_(0.0, config.t_init_scale/np.sqrt(self.mlp_size))
-        if self.mlp_down_t.bias is not None:
-            self.mlp_down_t.bias.data.zero_()
+        self.up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.up.total_in))
+        if self.up.linear.bias is not None:
+            self.up.linear.bias.data.zero_()
         
-        self.O_t.special_inited = True
-        self.mlp_down_t.special_inited = True
+        self.z_proj.linear.weight.data.normal_(0.0, 1/np.sqrt(self.z_proj.total_in))
+        if self.z_proj.linear.bias is not None:
+            self.z_proj.linear.bias.data.zero_()
+
+        self.down.linear.weight.data.normal_(0.0, 1/np.sqrt(self.down.total_in))
+        if self.down.linear.bias is not None:
+            self.down.linear.bias.data.zero_()
+
+        self.down.linear.weight.data[-self.stream_size:] *= config.t_init_scale
+
+        self.up.special_inited = True
+        self.z_proj.special_inited = True
+        self.down.special_inited = True
+
+        self.up.linear.special_inited = True
+        self.z_proj.linear.special_inited = True
+        self.down.linear.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
@@ -121,20 +132,23 @@ class SwiftLayer(nn.Module):
         assert self.hidden_size % 2 == 0, "Hidden size must be divisible by 2!"
         self.stream_size = self.hidden_size // 2
 
-        self.Q = nn.Linear(self.hidden_size, self.qkv_size, bias=config.use_qkv_bias)
-        self.K = nn.Linear(self.hidden_size, self.qkv_size, bias=config.use_qkv_bias)
-        self.V = nn.Linear(self.hidden_size, self.qkv_size, bias=config.use_qkv_bias)
-        self.O = nn.Linear(self.qkv_size, self.hidden_size, bias=False)
-        self.O_t = nn.Linear(self.qkv_size, self.stream_size, bias=False)
-
-        self.mlp_gate = nn.Linear(self.hidden_size, self.mlp_size, bias=False)
-        self.mlp_up = nn.Linear(self.hidden_size, self.mlp_size, bias=False)
-        self.mlp_down = nn.Linear(self.mlp_size, self.hidden_size, bias=False)
-        self.mlp_down_t = nn.Linear(self.mlp_size, self.stream_size, bias=False)
-
-        self.z_proj = nn.Linear(self.hidden_size, 3*self.z_size, bias=False)
-        self.z_gate = nn.Linear(self.z_size, self.mlp_size, bias=False)
-        self.z_up = nn.Linear(self.z_size, self.mlp_size, bias=False)
+        self.up = FusedLinear(
+            self.hidden_size,
+            [self.qkv_size]*3 + [self.mlp_size]*2 + [self.z_size]*3,
+            bias=False
+        )
+        self.z_proj = FusedLinear(
+            self.z_size,
+            [self.mlp_size]*2,
+            bias=False,
+            contiguous=True
+        )
+        self.down = FusedLinear(
+            [self.qkv_size, self.mlp_size],
+            [self.hidden_size, self.stream_size],
+            bias=False,
+            contiguous=True
+        )
 
         self.attn = RotaryAttention(
             self.hidden_size,
@@ -148,14 +162,10 @@ class SwiftLayer(nn.Module):
         )
         self.act = ACT2FN[config.hidden_act]
 
-        self.attn_norm = SeperatedLayerNorm(2, config.hidden_size, eps=config.layer_norm_eps)
-        self.mlp_norm = SeperatedLayerNorm(2, config.hidden_size, eps=config.layer_norm_eps)
+        self.norm = SeperatedLayerNorm(2, config.hidden_size, eps=config.layer_norm_eps)
 
-        base_t_attn = max(1 / (2 + 2*layer_idx), config.base_t)
-        self.base_t_attn = np.log(base_t_attn / (1 - base_t_attn))
-
-        base_t_mlp = max(1 / (1 + 2 + 2*layer_idx), config.base_t)
-        self.base_t_mlp = np.log(base_t_mlp / (1 - base_t_mlp))
+        base_t = max(1 / (2+layer_idx), config.base_t)
+        self.base_t = np.log(base_t / (1 - base_t))
 
         self.z_scale = 1 / np.sqrt(config.num_layers * self.z_size)
 
@@ -168,18 +178,35 @@ class SwiftLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
+        bs = hidden_states.shape[0]//2
 
-        hidden_states = self.attn_forward(
-            hidden_states, position_ids, attention_mask, past_key_value
+        q, k, v, gate, up, shift, mu, log_sigma = self.up(self.norm(hidden_states))
+
+        shift = shift[bs:] # decoder is second half
+        mu = mu[:bs] * self.z_scale # encoder is first half
+        log_sigma = log_sigma[:bs] * self.z_scale
+        sigma = F.softplus(log_sigma + np.log(np.e - 1))
+
+        z_scaled = (shift + mu + sigma * z).repeat(2, 1, 1)
+        z_gate, z_up = self.z_proj(z_scaled)
+        z_gate += gate
+        z_up += up
+
+        attn_out = self.attn(
+            q, k, v,
+            position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value
         )
+        mlp_out = self.act(z_gate) * z_up
+    
+        y, t = self.down(attn_out, mlp_out)
 
-        hidden_states, mu, sigma = self.mlp_forward(hidden_states, z)
-
-        return hidden_states, mu, sigma
+        return self.update_streams(hidden_states, y, t), mu, sigma
 
 
-    def update_streams(self, hidden_states, y, t, base_t):
-        gate = torch.sigmoid(t + base_t)
+    def update_streams(self, hidden_states, y, t):
+        gate = torch.sigmoid(t + self.base_t)
 
         y[:, :, :self.stream_size] = (
             gate * y[:, :, :self.stream_size].clone() +
@@ -189,53 +216,6 @@ class SwiftLayer(nn.Module):
         y[:, :, self.stream_size:] += hidden_states[:, :, self.stream_size:]
 
         return y
-
-
-    def attn_forward(self, hidden_states, position_ids, attention_mask=None, past_key_value=None):
-
-        normed = self.attn_norm(hidden_states)
-        q = self.Q(normed)
-        k = self.K(normed)
-        v = self.V(normed)
-
-        attn_out = self.attn(
-            q, k, v,
-            position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
-        y = self.O(attn_out)
-        t = self.O_t(attn_out)
-
-        return self.update_streams(hidden_states, y, t, self.base_t_attn)
-
-
-    def mlp_forward(self, hidden_states, z):
-        bs = hidden_states.shape[0]//2
-
-        normed = self.mlp_norm(hidden_states)
-        gate = self.mlp_gate(normed)
-        up = self.mlp_up(normed)
-
-        # we fuse this projection because it is small
-        shift, mu, log_sigma = self.z_proj(normed).chunk(3, dim=-1)
-        shift = shift[bs:] # decoder is second half
-        mu = mu[:bs] * self.z_scale # encoder is first half
-        log_sigma = log_sigma[:bs] * self.z_scale
-        
-        sigma = F.softplus(log_sigma + np.log(np.e - 1))
-
-        z_scaled = (shift + mu + sigma * z).repeat(2, 1, 1)
-
-        gate += self.z_gate(z_scaled)
-        up += self.z_up(z_scaled)
-
-        ff = self.act(gate) * up
-
-        y = self.mlp_down(ff)
-        t = self.mlp_down_t(ff)
-
-        return self.update_streams(hidden_states, y, t, self.base_t_mlp), mu, sigma
 
 
 class SwiftModel(XLAModel):
