@@ -168,20 +168,28 @@ class SwiftLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-        bs = encoder_states.shape[0]
 
-        x = torch.cat(
-            [
-                self.enc_norm(encoder_states),
-                self.dec_norm(decoder_states),
-            ],
-            dim=0
+        enc_attn, enc_mlp, enc_shift, enc_mu, enc_sigma = self.stage_1(
+            self.enc_norm(torch.cat(encoder_states, dim=-1)), position_ids, attention_mask, past_key_value
         )
-        q, k, v, gate, val, dec_shift, enc_mu, enc_log_sigma = self.proj_in(x)
+        dec_attn, dec_mlp, dec_shift, dec_mu, dec_sigma = self.stage_1(
+            self.dec_norm(torch.cat(decoder_states, dim=-1)), position_ids, attention_mask, past_key_value
+        )
+
+        z_out = ((dec_shift + enc_sigma) + enc_sigma * z)
+
+        encoder_states = self.state_2(encoder_states, enc_attn, enc_mlp, z_out)
+        decoder_states = self.state_2(decoder_states, dec_attn, dec_mlp, z_out)
+
+        return encoder_states, decoder_states, enc_mu, enc_sigma
+
+
+    def stage_1(self, x, position_ids, attention_mask=None, past_key_value=None):
         
-        dec_shift = dec_shift[bs:]
-        enc_mu = self.z_scale * enc_mu[:bs]
-        enc_sigma = F.softplus(self.z_scale * enc_log_sigma[:bs] + np.log(np.e - 1))
+        q, k, v, gate, val, shift, mu, log_sigma = self.proj_in(x)
+        
+        mu = self.z_scale * mu
+        sigma = F.softplus(self.z_scale * log_sigma + np.log(np.e - 1))
 
         attn_out = self.attn(
             q, k, v,
@@ -190,21 +198,20 @@ class SwiftLayer(nn.Module):
             past_key_value=past_key_value
         )
         mlp_out = self.mlp(gate, val)
-        z_out = ((dec_shift + enc_sigma) + enc_sigma * z).repeat(2, 1, 1)
 
-        y_gate, y_res, log_gate = self.proj_out(attn_out, mlp_out, z_out)
+        return attn_out, mlp_out, shift, mu, sigma
+
+
+    def state_2(self, x, attn, mlp, z):
+
+        y_gate, y_res, log_gate = self.proj_out(attn, mlp, z)
         gate = torch.sigmoid(log_gate + self.log_base_gate)
 
-        x = torch.cat([encoder_states, decoder_states], dim=0)
-
-        gated, res = x.chunk(2, dim=-1)
+        gated, res = x
         gated = gate * y_gate + (1 - gate) * gated
         res = y_res + res
-        
-        x = torch.cat([gated, res], dim=-1)
-        encoder_states, decoder_states = x.chunk(2, dim=0)
 
-        return encoder_states, decoder_states, enc_mu, enc_sigma
+        return gated, res
 
 
 class SwiftModel(XLAModel):
@@ -281,6 +288,9 @@ class SwiftModel(XLAModel):
         else:
             decoder_states = hidden_states/3 + self.decoder_embs(mask)/3 + self.pos_embs(position_ids)/3
 
+        encoder_states = tuple(torch.chunk(encoder_states, 2, dim=-1))
+        decoder_states = tuple(torch.chunk(decoder_states, 2, dim=-1))
+
         return encoder_states, decoder_states
 
 
@@ -296,7 +306,7 @@ class SwiftModel(XLAModel):
 
         z = torch.randn(
             [self.num_layers, bs, seq_len, self.config.z_size],
-            device=input_ids.device, dtype=encoder_states.dtype
+            device=input_ids.device, dtype=encoder_states[0].dtype
         )
 
         mus = []
@@ -312,7 +322,8 @@ class SwiftModel(XLAModel):
         mus = torch.stack(mus, dim=0)
         sigmas = torch.stack(sigmas, dim=0)
 
-        lm_logits = self.lm_head(self.norm(decoder_states))
+        decoder_states = self.norm(torch.cat(decoder_states, dim=-1))
+        lm_logits = self.lm_head(decoder_states)
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, mus, sigmas

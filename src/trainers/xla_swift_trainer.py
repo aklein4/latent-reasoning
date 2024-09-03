@@ -37,6 +37,14 @@ class XLASwiftTrainer(BaseXLATrainer):
         return correct.sum() / mask.float().sum()
 
 
+    def logp_per_token(self, log_probs, mask):
+        return -log_probs.sum() / mask.float().sum()
+
+    def logp_per_token_nopad(self, log_probs, mask, x, pad):
+        log_probs = torch.where(mask & (x != pad), log_probs, torch.zeros_like(log_probs))
+        return -log_probs.sum() / (mask & (x != pad)).float().sum()
+
+
     def kl_per_token(self, kl, mask):
         return kl.sum() / mask.float().sum()
 
@@ -61,6 +69,8 @@ class XLASwiftTrainer(BaseXLATrainer):
             kl_loss=self.kl_loss(kl, mask),
             clip_perc=self.clip_perc(log_probs, mask),
             acc=self.acc(logits, x, mask),
+            logp_per_token=self.logp_per_token(log_probs, mask),
+            logp_per_token_nopad=self.logp_per_token_nopad(log_probs, mask, x, model.config.pad_token_id),
             kl_per_token=self.kl_per_token(kl, mask),
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
         )
