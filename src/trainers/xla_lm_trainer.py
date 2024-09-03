@@ -9,21 +9,16 @@ from  utils.training_utils import loss, ppl, acc, pcorr
 
 class XLALMTrainer(BaseXLATrainer):
 
-    def train_step(self, model, tokenizer, x, seg_ids):
+    def train_step(self, model, x, _unused):
 
-        out = model(x, segment_ids=seg_ids)
-        ignore_index = tokenizer.pad_token_id
-
-        if model.ignore_segment_ids:
-            extra_mask = None
-        else:
-            extra_mask = seg_ids[:, :-1] == seg_ids[:, 1:]
+        out = model(x)
+        ignore_index = x.config.pad_token_id
 
         results = DotDict(
-            lm_loss=loss(out, x, ignore_index, extra_mask),
-            lm_ppl=ppl(out, x, ignore_index, extra_mask),
-            lm_acc=acc(out, x, ignore_index, extra_mask),
-            lm_pcorr=pcorr(out, x, ignore_index, extra_mask),
+            lm_loss=loss(out, x, ignore_index),
+            lm_ppl=ppl(out, x, ignore_index),
+            lm_acc=acc(out, x, ignore_index),
+            lm_pcorr=pcorr(out, x, ignore_index),
         )
         results.loss = results.lm_loss
 
