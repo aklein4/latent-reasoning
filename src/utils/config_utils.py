@@ -7,14 +7,12 @@ import utils.constants as constants
 
 
 def load_model_config(
-    name: str,
-    tokenizer,
+    name: str
 ) -> Dict[str, Any]:
     """ Get a model configuration from a file and tokenizer.
 
     Args:
         name (str): name of the config to load
-        tokenizer: tokenizer to use
 
     Returns:
         Dict[str, Any]: dictionary containing the model configuration
@@ -26,12 +24,12 @@ def load_model_config(
         config = yaml.safe_load(f)
 
     # add special tokens
-    config["bos_token_id"] = tokenizer.bos_token_id
-    config["eos_token_id"] = tokenizer.eos_token_id
-    config["pad_token_id"] = tokenizer.pad_token_id
+    config["bos_token_id"] = constants.GPT2_BOS_TOKEN
+    config["eos_token_id"] = constants.GPT2_EOS_TOKEN
+    config["pad_token_id"] = constants.GPT2_PAD_TOKEN
 
     # get vocab size
-    config["vocab_size"] = len(tokenizer)
+    config["vocab_size"] = constants.GPT2_VOCAB_SIZE
 
     return config
 

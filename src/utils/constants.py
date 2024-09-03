@@ -15,7 +15,7 @@ BASE_PATH = os.path.dirname( # src
     )
 )
 
-# ddevice of current process
+# device of current process
 XLA_DEVICE = lambda: xm.xla_device()
 
 # id of the current device
@@ -36,6 +36,16 @@ TRAIN_CONFIG_PATH = os.path.join(BASE_PATH, "train_configs")
 
 # gpt2 tokenizer
 GPT2_TOKENIZER = 'openai-community/gpt2'
+
+# gpt2 tokenizer vocab size (with pad)
+GPT2_VOCAB_SIZE = 50258
+
+# gpt2 tokenizer built in special tokens
+GPT2_BOS_TOKEN = 50256
+GPT2_EOS_TOKEN = 50256
+
+# gpt2 tokenizer pad token id after adding [PAD]
+GPT2_PAD_TOKEN = 50257
 
 # huggingface login id
 HF_ID = "aklein4"

@@ -78,8 +78,8 @@ class BaseXLATrainer:
     ):
         if not constants.XLA_MAIN() or self.debug:
             return
+        
         with LogSection("Saving Checkpoint"):
-
             api = hf.HfApi()
 
             # create base checkpoint paths
@@ -91,20 +91,19 @@ class BaseXLATrainer:
                 # create paths for this model
                 tmp_path = os.path.join(tmp_base_path, name)
                 out_path = os.path.join(out_base_path, name)
+                os.makedirs(tmp_path, exist_ok=True)
 
-                # save in transformers format
+                # try save in config transformers format
                 try:
                     model.config.save_pretrained(tmp_path, push_to_hub=False)
-                
-                # just save state dict
                 except:
                     log_master_print(f"Warning: {name} config not saved!")
-                    
-                    try:
-                        os.makedirs(tmp_path, exist_ok=True)
-                        xm.save(model.state_dict(), os.path.join(tmp_path, "state_dict.pt"))
-                    except:
-                        log_master_print(f"ERROR: {name} NOT SAVED!")
+
+                # try save state locally  
+                try:
+                    xm.save(model.state_dict(), os.path.join(tmp_path, "state_dict.pt"))
+                except:
+                    log_master_print(f"ERROR: {name} STATE NOT SAVED!")
 
                 # push to hub
                 api.upload_folder(
@@ -113,9 +112,18 @@ class BaseXLATrainer:
                     path_in_repo=out_path,
                     repo_type="model"
                 )
-    
 
-    def _get_scheduler(self, optimizer):
+
+    def get_optimizer(self, model):
+        return syncfree.AdamW(
+            model.parameters(), lr=self.start_lr,
+            betas=(self.beta1, self.beta2),
+            eps=self.eps,
+            weight_decay=self.weight_decay
+        )
+
+
+    def get_scheduler(self, optimizer):
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
@@ -125,7 +133,7 @@ class BaseXLATrainer:
         )
 
         if self.lr_steps is None or self.end_lr is None:
-            assert self.lr_steps is None and self.end_lr is None, "Both lr_steps and end_lr must be None or neither!"
+            assert self.lr_steps is None and self.end_lr is None, "Both lr_steps and end_lr must both be defined or neither!"
             return warmup_scheduler
         
         cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -133,6 +141,7 @@ class BaseXLATrainer:
             self.lr_steps - self.warmup_steps,
             self.end_lr,
         )
+
         return torch.optim.lr_scheduler.SequentialLR(
             optimizer, [warmup_scheduler, cosine_scheduler],
             milestones=[self.warmup_steps]
@@ -142,7 +151,6 @@ class BaseXLATrainer:
     def train(
         self,
         model,
-        tokenizer,
         loader
     ):
 
@@ -152,92 +160,86 @@ class BaseXLATrainer:
         model.train()
 
         # init training objs
-        optimizer = syncfree.AdamW(
-            model.parameters(), lr=self.start_lr,
-            betas=(self.beta1, self.beta2),
-            eps=self.eps,
-            weight_decay=self.weight_decay
-        )
-        lr_scheduler = self._get_scheduler(optimizer)
+        optimizer = self.get_optimizer(model)
+        lr_scheduler = self.get_scheduler(optimizer)
 
-        # loop
+        # init loop vars
         curr_step = 0
-        token_tracker = xm.RateTracker()
+        seen_tokens = 0
         step_tracker = xm.RateTracker()
-        self.seen_tokens = 0
-        for x, seg_ids in loader:
-            assert x.shape == seg_ids.shape, f"Input ({x.shape}) and segment ids ({seg_ids.shape}) must have same shape!"
+        token_tracker = xm.RateTracker()
+        
+        # run loop
+        for batch in loader:
+            # batch should be tuple of tensors, each with the same batch size
 
-            # prepare x for accum
-            n_x = x.shape[0]
-            if n_x % self.mini_bs != 0:
-                log_print(f"Warning: sample size {n_x} not divisible by mini batch size {self.mini_bs}")
-            if n_x * constants.NUM_XLA_DEVICES() != self.bs:
-                log_print(f"Warning: sample size {n_x} with {constants.NUM_XLA_DEVICES()} devices does not match batch size {self.bs}")
-            
-            x_split = torch.split(x, self.mini_bs, dim=0)
-            seg_split = torch.split(seg_ids, self.mini_bs, dim=0)
+            # prepare minibatches
+            mini_batches = []
+            prev_n_x = None
+            for x in batch:
 
-            # accumulate gradients
+                n_x = x.shape[0]
+                if prev_n_x is not None and n_x != prev_n_x:
+                    raise ValueError(f"Batch sizes do not match: {n_x} != {prev_n_x}")
+                prev_n_x = n_x
+
+                if n_x % self.mini_bs != 0:
+                    log_print(f"Warning: sample size {n_x} not divisible by mini batch size {self.mini_bs}")
+                if n_x * constants.NUM_XLA_DEVICES() != self.bs:
+                    log_print(f"Warning: sample size {n_x} with {constants.NUM_XLA_DEVICES()} devices does not match batch size {self.bs}")
+                
+                mini_batches.append(torch.split(x, self.mini_bs, dim=0))
+
+            mini_batches = zip(*mini_batches)
+            num_mini_batches = len(mini_batches)
+
+            # accumulate gradients and results
             results_accum = DotDict()
-            for split_idx in range(len(x_split)):
-
-                mini_x = x_split[split_idx]
-                mini_seg = seg_split[split_idx]
+            for mini_batch in mini_batches:
 
                 # get results from train step
                 with autocast(constants.XLA_DEVICE()):
                     results = self.train_step(
                         model,
-                        tokenizer,
-                        mini_x,
-                        mini_seg
+                        *mini_batch
                     )
 
                     # scale results for accumulation
-                    # reductions are done with mean
+                    # reductions are done by averaging across devices, summing across mini batches
                     for k, v in results.items():
-                        results[k] = v / len(x_split)
+                        results[k] = v / num_mini_batches
 
-                    # save results
+                    # sum results
                     with torch.no_grad():
                         for k, v in results.items():
                             if k not in results_accum:
                                 results_accum[k] = 0.0
                             results_accum[k] = results_accum[k] + v.detach()
                 
-                # gradient reduction is done by averaging
+                # gradient reduction is done by averaging across devices, summing across mini batches
                 results.loss.backward()
-                if len(x_split) > 1:
+
+                # mark step if using gradient accumulation
+                if len(results_accum) > 1:
                     xm.mark_step()
 
             # perform a single optimizer step
             xm.optimizer_step(optimizer)
-            optimizer.zero_grad(set_to_none=True)
-            
-            # apply post processing to the model
-            model.post_step()
+            optimizer.zero_grad(set_to_none=(len(results_accum) == 1))
 
             # update lr
             self.log.lr = lr_scheduler.get_last_lr()[0]
             lr_scheduler.step()
 
-            # step tracking
-            step_tracker.add(1)
+            # update tracking
             curr_step += 1
+            step_tracker.add(1)
             self.log.steps_completed = curr_step
+            seen_tokens += self.bs * self.sequence_length
+            token_tracker.add(self.bs * self.sequence_length)
+            self.log.seen_tokens = seen_tokens
 
             def _post_step():
-
-                # token tracking
-                tokens_in_batch = xm.mesh_reduce(
-                    "tokens_batch_reduct",
-                    (x != tokenizer.pad_token_id).int().sum().item(),
-                    np.sum
-                )
-                token_tracker.add(tokens_in_batch)
-                self.seen_tokens += tokens_in_batch
-                self.log.seen_tokens = self.seen_tokens
 
                 # log
                 for k, v in results_accum.items():
@@ -259,10 +261,7 @@ class BaseXLATrainer:
                 if curr_step % self.checkpoint_interval == 0:
                     try:
                         self.save_checkpoint(
-                            {
-                                'model': model,
-                                'tokenizer': tokenizer,
-                            },
+                            {'model': model},
                             curr_step
                         )
                     except:
@@ -273,10 +272,7 @@ class BaseXLATrainer:
 
         try:
             self.save_checkpoint(
-                {
-                    'model': model,
-                    'tokenizer': tokenizer,
-                },
+                {'model': model},
                 curr_step
             )
         except:
@@ -286,9 +282,7 @@ class BaseXLATrainer:
     def train_step(
         self,
         model,
-        tokenizer,
-        x,
-        seg_ids,
+        *args
     ):
         """ Get results of a single training step.
          - Must return DotDict of results
@@ -296,10 +290,9 @@ class BaseXLATrainer:
 
         Args:
             model: model to train
-            x: input data [mini_bs, seq_len]
-            tokenizer: tokenizer for input data
+            *args: inputs to from the minibatch
 
         Returns:
-            DotDict: result tensors containin 'loss' key
+            DotDict: result tensors containing 'loss' key
         """
         raise NotImplementedError("train_step must be implemented in child class!")

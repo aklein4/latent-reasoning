@@ -4,17 +4,16 @@ import torch
 import numpy as np
 
 from utils.data_utils import load_byte_array
+import utils.constants as constants
 
 
 class Seq2SeqCollator:
 
     def __init__(
         self,
-        seq_length: int,
-        pad_token_id: int,
+        sequence_length: int,
     ):
-        self.seq_length = seq_length
-        self.pad_token_id = pad_token_id
+        self.sequence_length = sequence_length
         
 
     def __call__(
@@ -32,23 +31,23 @@ class Seq2SeqCollator:
         
         # apply max length
         for i in range(len(input_ids)):
-            if input_ids[i].shape[0] > self.seq_length:
-                input_ids[i] = input_ids[i][:self.seq_length]
+            if input_ids[i].shape[0] > self.sequence_length:
+                input_ids[i] = input_ids[i][:self.sequence_length]
 
         # create mask
         lengths = torch.tensor(np.random.randint(
             1,
             [x.shape[-1]-1 for x in input_ids],
         ))
-        ar = torch.arange(self.seq_length)
-        mask = torch.ones(len(input_ids), self.seq_length, dtype=torch.bool)
+        ar = torch.arange(self.sequence_length)
+        mask = torch.ones(len(input_ids), self.sequence_length, dtype=torch.bool)
         mask = torch.where(ar[None] < lengths, mask, torch.zeros_like(mask))
 
         # pad into single tensor
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
-            padding_value=self.pad_token_id
+            padding_value=constants.GPT2_PAD_TOKEN,
         )
 
         return input_ids, mask

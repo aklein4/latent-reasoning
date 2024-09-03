@@ -15,7 +15,8 @@ def main():
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(constants.GPT2_TOKENIZER, resume_download=None)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    
+    print(len(tokenizer))
+
     x = tokenizer(["Hello, my dog is cute", "His dog is cute too", "All dogs are cute"], return_tensors="pt", padding="max_length", max_length=16).input_ids
     seg_ids = torch.randint_like(x, 4)
 
