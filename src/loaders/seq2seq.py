@@ -38,7 +38,7 @@ class Seq2SeqCollator:
         lengths = torch.tensor(np.random.randint(
             1,
             [x.shape[-1]-1 for x in input_ids],
-        ))
+        )).unsqueeze(-1)
         ar = torch.arange(self.sequence_length)
         mask = torch.ones(len(input_ids), self.sequence_length, dtype=torch.bool)
         mask = torch.where(ar[None] < lengths, mask, torch.zeros_like(mask))
