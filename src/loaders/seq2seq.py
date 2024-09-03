@@ -40,8 +40,8 @@ class Seq2SeqCollator:
             [x.shape[-1]-1 for x in input_ids],
         )).unsqueeze(-1)
         ar = torch.arange(self.sequence_length)
-        mask = torch.ones(len(input_ids), self.sequence_length, dtype=torch.bool)
-        mask = torch.where(ar[None] < lengths, mask, torch.zeros_like(mask))
+        mask = torch.zeros(len(input_ids), self.sequence_length, dtype=torch.bool)
+        mask = torch.where(ar[None] < lengths, mask, torch.ones_like(mask))
 
         # pad into single tensor
         input_ids = torch.nn.utils.rnn.pad_sequence(

@@ -8,6 +8,31 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
+class SeperatedLayerNorm(nn.Module):
+
+    def __init__(self, num_groups, num_features, eps=1e-5, affine=True):
+        super().__init__()
+
+        self.num_groups = num_groups
+        self.num_features = num_features
+        self.eps = eps
+        self.affine = affine
+
+        self.group_norm = nn.GroupNorm(
+            num_groups, num_features,
+            eps=eps, affine=affine
+        )
+
+
+    def forward(self, x):
+        og_shape = x.shape
+
+        x = x.view(-1, self.num_features)
+        x = self.group_norm(x)
+
+        return x.view(*og_shape)
+
+
 class FusedLinear(nn.Module):
 
     def __init__(
@@ -157,17 +182,14 @@ class RotaryEmbedding(nn.Module):
         sin = freqs.sin()
         cos = freqs.cos()
         
-        self.sin_emb = nn.Embedding(self.max_position_embeddings, self.dim)
-        self.sin_emb.weight.data = sin.contiguous()
-
-        self.cos_emb = nn.Embedding(self.max_position_embeddings, self.dim)
-        self.cos_emb.weight.data = cos.contiguous()
+        self.sin_emb = sin.contiguous()
+        self.cos_emb = cos.contiguous()
 
 
     def _get_sin_cos(self, position_ids):
         return (
-            self.sin_emb(position_ids).detach(),
-            self.cos_emb(position_ids).detach()
+            F.embedding(position_ids, self.sin_emb).detach(),
+            F.embedding(position_ids, self.cos_emb).detach()
         )
 
 
