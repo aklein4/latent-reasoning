@@ -7,12 +7,12 @@ architectures: [
 max_sequence_length: 1024
 
 hidden_size: 1024
-mlp_size: 1536
+mlp_size: 2816
 
 attention_head_size: 64
-num_attention_heads: 8
+num_attention_heads: 16
 
-num_layers: 48
+num_layers: 24
 
 use_bias: false
 hidden_act: silu
