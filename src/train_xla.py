@@ -31,7 +31,7 @@ def _mp_fn(index, args):
     train_config = load_train_config(args.train_config)
 
     # port training config to model
-    model_config.max_sequence_length = train_config["sequence_length"]
+    model_config['max_sequence_length'] = train_config["sequence_length"]
 
     log_print("Loading model...")
     model_type = model_config.pop("model_type")
