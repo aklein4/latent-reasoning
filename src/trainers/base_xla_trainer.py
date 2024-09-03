@@ -190,7 +190,7 @@ class BaseXLATrainer:
                 
                 mini_batches.append(torch.split(x, self.mini_bs, dim=0))
 
-            mini_batches = zip(*mini_batches)
+            mini_batches = list(zip(*mini_batches))
             num_mini_batches = len(mini_batches)
 
             # accumulate gradients and results
