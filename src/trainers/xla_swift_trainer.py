@@ -59,7 +59,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         results = DotDict(
             token_loss=self.token_loss(log_probs, mask),
             kl_loss=self.kl_loss(kl, mask),
-            clip_perc=self.clip_perc(log_probs),
+            clip_perc=self.clip_perc(log_probs, mask),
             acc=self.acc(logits, x, mask),
             kl_per_token=self.kl_per_token(kl, mask),
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
