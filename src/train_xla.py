@@ -52,6 +52,7 @@ def _mp_fn(index, args):
         train_config["dataset"],
         "train",
         train_config["bs"],
+        train_config["collator_type"],
         {
             "sequence_length": train_config["sequence_length"],
         },

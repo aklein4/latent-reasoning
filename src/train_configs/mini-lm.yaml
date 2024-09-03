@@ -1,5 +1,6 @@
 trainer_type: XLALMTrainer
 
+collator_type: seq2seq
 dataset: fw-45b
 stream_dataset: true
 
