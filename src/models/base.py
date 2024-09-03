@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import numpy as np
-
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
     RotaryAttention,

@@ -8,76 +8,41 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
-class GaussianMixtureModule(nn.Module):
+class FusedLinear(nn.Module):
 
-    def __init__(self, input_dim, output_dim, n_components):
+    def __init__(
+        self,
+        in_feature_list,
+        out_feature_list,
+        bias=True
+    ):
         super().__init__()
 
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.n_components = n_components
+        self.in_feature_list = in_feature_list
+        self.out_feature_list = out_feature_list
+        self.bias = bias
 
-        self.proj = nn.Linear(input_dim, self.n_components, bias=False)
+        self.total_in = sum(in_feature_list)
+        self.total_out = sum(out_feature_list)
 
-        self.mu = nn.Parameter(torch.randn(self.n_components, self.output_dim))
-        self.log_sigma = nn.Parameter(torch.zeros(self.n_components, self.output_dim))
-
-
-    def forward(self, x):
-        logpi = torch.log_softmax(self.proj(x), dim=-1)
-
-        return GaussianMixtureDistribution(
-            logpi,
-            self.mu,
-            F.softplus(self.log_sigma)
-        )
-
-
-class GaussianMixtureDistribution:
-
-    def __init__(self, logpi, mu, sigma):
-
-        self.shape = logpi.shape[:-1]
-        self.k = logpi.shape[-1]
-        self.d = mu.shape[-1]
-
-        self.logpi = logpi.view(-1, self.k) # [R, K]
-        self.mu = mu # [K, D]
-        self.sigma = sigma # [K, D]
-
-    
-    def sample(self, n_samples):
-
-        # sample from categorical distribution [n, R]
-        z = torch.distributions.Categorical(logits=self.logpi).sample((n_samples,))
-        z = z.view(-1)
-
-        # sample from gaussian distribution
-        mu = self.mu[z].view(n_samples, *self.shape, -1)
-        sigma = self.sigma[z].view(n_samples, *self.shape, -1)
-        return mu + sigma * torch.randn_like(mu)
+        self.linear = nn.Linear(self.total_in, self.total_out, bias=bias)
     
 
-    def log_prob(self, x):
+    def _error_message(self, inputs):
+        raise ValueError(f'expected inputs of size {self.in_feature_list}, got {[v.shape[-1] for v in inputs]}')
 
-        n = x.shape[0]
-        x = x.view(n, -1, 1, self.d) # [n, R, 1, D]
 
-        mu_n = self.mu[None, None] # [1, 1, K, D]
-        sigma_n = self.sigma[None, None] # [1, 1, K, D]
-        logpi_n = self.logpi[None] # [1, R, K]
+    def forward(self, *inputs):
+        if len(inputs) != len(self.in_feature_list):
+            self._error_message(inputs)
 
-        log_probs = -0.5 * (
-            2 * torch.log(sigma_n) +
-            np.log(2 * np.pi) +
-            ((x - mu_n) / sigma_n) ** 2
-        ) # [n, R, K, D]
+        x = torch.cat(inputs, dim=-1)
+        if x.shape[-1] != self.total_in:
+            self._error_message(inputs)
 
-        log_probs = torch.sum(log_probs, dim=-1) # [n, R, K]
-        log_probs = torch.logsumexp(logpi_n + log_probs, dim=-1)
+        x = self.linear(x)
 
-        return log_probs.view(n, *self.shape)
-
+        return torch.split(x, self.out_feature_list, dim=-1)
 
 
 class RotaryAttention(nn.Module):
@@ -85,25 +50,21 @@ class RotaryAttention(nn.Module):
     def __init__(
         self,
         hidden_size,
+        attention_head_size,
         num_attention_heads,
         use_rope,
         rope_fraction,
         max_sequence_length,
         rope_base,
-        layer_idx):
+        layer_idx
+    ):
         super().__init__()
 
         self.layer_idx = layer_idx
 
         self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
-        
-        if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {self.num_heads})."
-            )
+        self.head_dim = attention_head_size
         
         self.use_rope = use_rope
         if self.use_rope:
