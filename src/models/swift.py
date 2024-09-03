@@ -206,14 +206,14 @@ class SwiftLayer(nn.Module):
     def update_streams(self, hidden_states, y, t):
         gate = torch.sigmoid(t + self.base_t)
 
-        y[:, :, :self.stream_size] = (
-            gate * y[:, :, :self.stream_size].clone() +
+        gated = (
+            gate * y[:, :, :self.stream_size] +
             (1 - gate) * hidden_states[:, :, :self.stream_size]
         )
 
-        y[:, :, self.stream_size:] = y[:, :, self.stream_size:].clone() + hidden_states[:, :, self.stream_size:]
+        res = y[:, :, self.stream_size:] + hidden_states[:, :, self.stream_size:]
 
-        return y
+        return torch.cat([gated, res], dim=-1)
 
 
 class SwiftModel(XLAModel):
