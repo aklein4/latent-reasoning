@@ -141,13 +141,11 @@ class SwiftLayer(nn.Module):
             self.z_size,
             [self.mlp_size]*2,
             bias=False,
-            contiguous=True
         )
         self.down = FusedLinear(
             [self.qkv_size, self.mlp_size],
             [self.hidden_size, self.stream_size],
             bias=False,
-            contiguous=True
         )
 
         self.attn = RotaryAttention(
@@ -189,8 +187,8 @@ class SwiftLayer(nn.Module):
 
         z_scaled = (shift + mu + sigma * z).repeat(2, 1, 1)
         z_gate, z_up = self.z_proj(z_scaled)
-        z_gate += gate
-        z_up += up
+        gate = gate + z_gate
+        up = up + z_up
 
         attn_out = self.attn(
             q, k, v,
@@ -198,7 +196,7 @@ class SwiftLayer(nn.Module):
             attention_mask=attention_mask,
             past_key_value=past_key_value
         )
-        mlp_out = self.act(z_gate) * z_up
+        mlp_out = self.act(gate) * up
     
         y, t = self.down(attn_out, mlp_out)
 
@@ -213,7 +211,7 @@ class SwiftLayer(nn.Module):
             (1 - gate) * hidden_states[:, :, :self.stream_size]
         )
 
-        y[:, :, self.stream_size:] += hidden_states[:, :, self.stream_size:]
+        y[:, :, self.stream_size:] = y[:, :, self.stream_size:].clone() + hidden_states[:, :, self.stream_size:]
 
         return y
 
