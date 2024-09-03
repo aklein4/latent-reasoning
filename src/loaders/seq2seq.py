@@ -26,7 +26,7 @@ class Seq2SeqCollator:
         try:
             input_ids = [load_byte_array(x) for x in input_ids]
         except:
-            input_ids = np.array(input_ids)
+            input_ids = [np.array(x) for x in input_ids]
         input_ids = [torch.tensor(x.astype(np.int64)).long() for x in input_ids]
         
         # apply max length
