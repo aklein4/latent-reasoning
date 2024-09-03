@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
+    FusedLinear,
     RotaryAttention,
     GLU
 )
@@ -13,47 +14,33 @@ from utils.model_utils import (
 
 class BaseConfig(XLAConfig):
     """
-    Base configuration class for experiments.
-
     Args:
-        vocab_size (`int`):
-            Vocabulary size of the model. Defines the number of different tokens that
-            can be represented by the `inputs_ids`.
-        max_sequence_length (`int`):
-            The maximum sequence length that this model might ever be used with.
         hidden_size (`int`):
             Number of hidden layers in the Transformer decoder.
         mlp_size (`int`):
             Dimension of the MLP representations.
-        num_layers (`int`):
-            Number of hidden layers in the Transformer decoder.
+        attention_head_size (`int`):
+            Size of the attention heads in the Transformer encoder
         num_attention_heads (`int`):
             Number of attention heads for each attention layer in the Transformer encoder.
-        use_bias (`bool`, *optional*, defaults to `True`):
+        num_layers (`int`):
+            Number of hidden layers in the Transformer decoder.
+        use_bias (`bool`):
             Whether or not the model should use bias for internal layers.
-        hidden_act (`str` or `function`, *optional*, defaults to `"silu"`):
+        hidden_act (`str` or `function`):
             The non-linear activation function (function or string).
-        layer_norm_eps (`float`, *optional*, defaults to 1e-05):
+        layer_norm_eps (`float`):
             The epsilon used by the normalization layers.
-        use_rope (`bool`, *optional*, defaults to `False`):
+        use_rope (`bool`):
             Whether or not to use the RoPE embeddings.
-        rope_fraction (`int`, *optional*, defaults to 1):
+        rope_fraction (`int`):
             The fraction of the hidden size to use for the RoPE embeddings.
-        rope_base (`float`, *optional*, defaults to `10000.0`):
+        rope_base (`float`):
             The base period of the RoPE embeddings.
-        initializer_range (`float`, *optional*, defaults to 0.02):
-            The standard deviation of the truncated_normal_initializer for initializing
-             all weight matrices.
-        identity_init(`bool`, *optional*, defaults to `False`):
+        initializer_range (`float`):
+            The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
+        identity_init(`bool`):
             Whether or not to initialize the model with identity blocks.
-        bos_token_id (int, *optional*, defaults to 0):
-            The id of the `BOS` token in the vocabulary.
-        eos_token_id (int, *optional*, defaults to 0):
-            The id of the `EOS` token in the vocabulary.
-        pad_token_id (int, *optional*, defaults to 0):
-            The id of the `PAD` token in the vocabulary.
-        ignore_segment_ids (`bool`, *optional*, defaults to `False`):
-            Whether or not to ignore the segment ids in transformer.
         gradient_checkpointing_layers (`int`, *optional*, defaults to 1000000):
             The number of layers to checkpoint in the model.
     """
@@ -62,36 +49,30 @@ class BaseConfig(XLAConfig):
 
     def __init__(
         self,
-        vocab_size,
-        max_sequence_length,
         hidden_size,
         mlp_size,
-        num_layers,
+        attention_head_size,
         num_attention_heads,
-        use_bias=True,
-        hidden_act="silu",
-        layer_norm_eps=1e-5,
-        use_rope=False,
-        rope_fraction=1,
-        rope_base=10000.0,
-        initializer_range=0.02,
-        identity_init=False,
-        bos_token_id=0,
-        eos_token_id=0,
-        pad_token_id=0,
-        ignore_segment_ids=False,
-        gradient_checkpointing_layers=1000000,
+        num_layers,
+        use_bias,
+        hidden_act,
+        layer_norm_eps,
+        use_rope,
+        rope_fraction,
+        rope_base,
+        initializer_range,
+        identity_init,   
+        gradient_checkpointing_layers,     
         *args,
         **kwargs,
     ):
-        self.vocab_size = vocab_size
-        self.max_sequence_length = max_sequence_length
 
         self.hidden_size = hidden_size
         self.mlp_size = mlp_size
+        self.attention_head_size = attention_head_size
+        self.num_attention_heads = num_attention_heads
 
         self.num_layers = num_layers
-        self.num_attention_heads = num_attention_heads
 
         self.use_bias = use_bias
         self.hidden_act = hidden_act
@@ -103,12 +84,6 @@ class BaseConfig(XLAConfig):
 
         self.initializer_range = initializer_range
         self.identity_init = identity_init
-
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
-        self.pad_token_id = pad_token_id
-
-        self.ignore_segment_ids = ignore_segment_ids
 
         self.gradient_checkpointing_layers = gradient_checkpointing_layers
 
@@ -122,20 +97,22 @@ class BaseLayer(nn.Module):
 
         self.hidden_size = config.hidden_size
         self.mlp_size = config.mlp_size
+        self.qkv_size = config.attention_head_size * config.num_attention_heads
 
-        self.proj_in = nn.Linear(
+        self.proj_in = FusedLinear(
             self.hidden_size,
-            3 * self.hidden_size + 2 * self.mlp_size,
+            [self.qkv_size]*3 + [self.mlp_size]*2,
             bias=config.use_bias
         )
-        self.proj_out = nn.Linear(
-            self.hidden_size + self.mlp_size,
+        self.proj_out = FusedLinear(
+            [self.qkv_size, self.mlp_size],
             self.hidden_size,
             bias=False
         )
 
         self.attn = RotaryAttention(
             self.hidden_size,
+            config.attention_head_size,
             config.num_attention_heads,
             config.use_rope,
             config.rope_fraction,
@@ -151,16 +128,13 @@ class BaseLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: torch.Tensor,
+        position_ids: torch.LongTensor,
         attention_mask=None,
         past_key_value=None,
     ):
 
         x = self.norm(hidden_states)
-        q, k, v, gate, val = self.proj_in(x).split(
-            [self.hidden_size] * 3 + [self.mlp_size] * 2,
-            dim=-1
-        )
+        q, k, v, gate, val = self.proj_in(x)
 
         attn_out = self.attn(
             q, k, v,
@@ -170,7 +144,7 @@ class BaseLayer(nn.Module):
         )
         mlp_out = self.mlp(gate, val)
 
-        y = self.proj_out(torch.cat([attn_out, mlp_out], dim=-1))
+        y = self.proj_out(attn_out, mlp_out)
 
         return hidden_states + y
 
@@ -203,7 +177,7 @@ class BaseTransformer(nn.Module):
         self.get_extras(config)
 
         # Compute configuration
-        self.gradient_checkpointing = config.gradient_checkpointing
+        self.gradient_checkpointing = False
         self.gradient_checkpointing_layers = config.gradient_checkpointing_layers
 
 
@@ -359,9 +333,6 @@ class BaseLmModel(XLAModel):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        # for training
-        self.ignore_segment_ids = config.ignore_segment_ids
-
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -374,8 +345,6 @@ class BaseLmModel(XLAModel):
         attention_mask: Optional[torch.BoolTensor]=None,
         kv=None,
     ):
-        if self.ignore_segment_ids:
-            segment_ids = None
 
         # get lm predictions
         out = self.model(

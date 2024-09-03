@@ -15,13 +15,16 @@ def main():
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(constants.GPT2_TOKENIZER, resume_download=None)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    print(len(tokenizer))
+    assert len(tokenizer) == constants.GPT2_VOCAB_SIZE
+    assert tokenizer.pad_token_id == constants.GPT2_PAD_TOKEN
+    assert tokenizer.bos_token_id == constants.GPT2_BOS_TOKEN
+    assert tokenizer.eos_token_id == constants.GPT2_EOS_TOKEN
 
     x = tokenizer(["Hello, my dog is cute", "His dog is cute too", "All dogs are cute"], return_tensors="pt", padding="max_length", max_length=16).input_ids
     seg_ids = torch.randint_like(x, 4)
 
     print("loading model...")
-    config = load_model_config(MODEL_CONFIG, tokenizer)
+    config = load_model_config(MODEL_CONFIG)
     model = BaseLmModel(BaseConfig(**config))
 
     out = model(x, segment_ids=seg_ids)

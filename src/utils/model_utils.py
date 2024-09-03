@@ -18,6 +18,11 @@ class FusedLinear(nn.Module):
     ):
         super().__init__()
 
+        if isinstance(in_feature_list, int):
+            in_feature_list = [in_feature_list]
+        if isinstance(out_feature_list, int):
+            out_feature_list = [out_feature_list]
+
         self.in_feature_list = in_feature_list
         self.out_feature_list = out_feature_list
         self.bias = bias
@@ -36,12 +41,17 @@ class FusedLinear(nn.Module):
         if len(inputs) != len(self.in_feature_list):
             self._error_message(inputs)
 
-        x = torch.cat(inputs, dim=-1)
+        if len(self.in_feature_list) > 1:
+            x = torch.cat(inputs, dim=-1)
+        else:
+            x = inputs[0]
         if x.shape[-1] != self.total_in:
             self._error_message(inputs)
 
         x = self.linear(x)
 
+        if len(self.out_feature_list) == 1:
+            return x
         return torch.split(x, self.out_feature_list, dim=-1)
 
 
@@ -65,7 +75,8 @@ class RotaryAttention(nn.Module):
         self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
         self.head_dim = attention_head_size
-        
+        self.total_dim = self.num_heads * self.head_dim
+
         self.use_rope = use_rope
         if self.use_rope:
             self.rope = RotaryEmbedding(
@@ -112,7 +123,7 @@ class RotaryAttention(nn.Module):
         attn_output = torch.matmul(attn_weights, value_states)
 
         attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        attn_output = attn_output.reshape(bsz, q_len, self.total_dim)
 
         return attn_output
 

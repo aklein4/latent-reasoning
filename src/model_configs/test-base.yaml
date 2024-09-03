@@ -9,8 +9,10 @@ max_sequence_length: 16
 hidden_size: 128
 mlp_size: 256
 
-num_layers: 4
+attention_head_size: 32
 num_attention_heads: 2
+
+num_layers: 4
 
 use_bias: true
 hidden_act: silu
@@ -23,5 +25,5 @@ rope_base: 10000
 initializer_range: 0.02
 identity_init: false
 
-ignore_segment_ids: false
 gradient_checkpointing: false
+gradient_checkpointing_layers: 1000000

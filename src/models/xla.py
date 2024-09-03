@@ -12,10 +12,41 @@ class XLAConfig(PretrainedConfig):
 
     def __init__(
         self,
+        vocab_size,
+        max_sequence_length,
+        bos_token_id=0,
+        eos_token_id=0,
+        pad_token_id=0,
         gradient_checkpointing=False,
         *args,
         **kwargs,
     ):
+        """
+        Things initialized here are needed for the rest of the training pipeline.
+
+        Args:
+            vocab_size (`int`):
+                Vocabulary size of the model. Defines the number of different tokens that
+                can be represented by the `inputs_ids`.
+            max_sequence_length (`int`):
+                The maximum sequence length that this model might ever be used with.
+            bos_token_id (int, *optional*, defaults to 0):
+                The id of the `BOS` token in the vocabulary.
+            eos_token_id (int, *optional*, defaults to 0):
+                The id of the `EOS` token in the vocabulary.
+            pad_token_id (int, *optional*, defaults to 0):
+                The id of the `PAD` token in the vocabulary.
+            gradient_checkpointing (bool, *optional*, defaults to False):
+                Whether to use gradient checkpointing to save memory at the cost of extra computation.
+        """
+
+        self.vocab_size = vocab_size
+        self.max_sequence_length = max_sequence_length
+
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.pad_token_id = pad_token_id
+
         # requires workaround
         tmp_gradient_checkpointing = gradient_checkpointing
 
