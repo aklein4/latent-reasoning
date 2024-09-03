@@ -1,7 +1,7 @@
 """ Dataloaders for the project. """
 
-from packed import PackedCollator
-from seq2seq import Seq2SeqCollator
+from loaders.packed import PackedCollator
+from loaders.seq2seq import Seq2SeqCollator
 
 COLLATOR_DICT = {
     "packed": PackedCollator,
