@@ -179,11 +179,11 @@ class RotaryEmbedding(nn.Module):
         freqs = freqs.permute(1, 0) # [L, D/2]
 
         freqs = torch.cat((freqs, freqs), dim=-1) # [L, D]
-        sin = freqs.sin()
-        cos = freqs.cos()
+        sin = freqs.sin().contiguous()
+        cos = freqs.cos().contiguous()
         
-        self.sin_emb = sin.contiguous()
-        self.cos_emb = cos.contiguous()
+        self.register_buffer('sin_emb', sin, persistent=True)
+        self.register_buffer('cos_emb', cos, persistent=True)
 
 
     def _get_sin_cos(self, position_ids):
