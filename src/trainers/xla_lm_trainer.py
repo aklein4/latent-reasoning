@@ -12,7 +12,7 @@ class XLALMTrainer(BaseXLATrainer):
     def train_step(self, model, x, _unused):
 
         out = model(x)
-        ignore_index = x.config.pad_token_id
+        ignore_index = model.config.pad_token_id
 
         results = DotDict(
             lm_loss=loss(out, x, ignore_index),
