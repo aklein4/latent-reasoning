@@ -46,7 +46,7 @@ class XLASwiftTrainer(BaseXLATrainer):
 
     def train_step(self, model, x, mask):
 
-        logits, mu, sigma = model(x)
+        logits, mu, sigma = model(x, mask)
         
         # log probs, with zero for unmasked tokens
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
