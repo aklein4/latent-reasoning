@@ -39,6 +39,10 @@ class SwiftConfig(XLAConfig):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
+        disable_fiter (`bool`):
+            Whether or not to disable the stream filter.
+        debug (`bool`):
+            Whether or not to run in debug mode, to test if the decoder can see encoder information.
     """
 
     model_type = 'base'
@@ -57,6 +61,8 @@ class SwiftConfig(XLAConfig):
         rope_fraction=None,
         rope_base=None,
         z_size=None,
+        disable_filter=False,
+        debug=False,
         *args,
         **kwargs,
     ):
@@ -79,12 +85,17 @@ class SwiftConfig(XLAConfig):
 
         self.z_size = z_size
 
+        self.disable_filter = disable_filter
+        self.debug = debug
+
         super().__init__(*args, **kwargs)
 
 
 class SwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
+        if config.debug:
+            return
 
         self.cross_proj.weight.data.zero_()
         if self.cross_proj.bias is not None:
@@ -96,6 +107,8 @@ class SwiftLayer(nn.Module):
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
+        self.disable_filter = config.disable_filter
+        self.debug = config.debug
 
         self.hidden_size = config.hidden_size
         self.mlp_size = config.mlp_size
@@ -173,12 +186,18 @@ class SwiftLayer(nn.Module):
         mlp_out = self.mlp(gate, up)
         z_out = (shift + mu + sigma * z).repeat(2, 1, 1)
 
+        if self.debug:
+            z_out = torch.zeros_like(z_out)
+
         y = self.down(attn_out, mlp_out, z_out)
 
         return self.update_stream(hidden_states, y), mu, sigma
 
 
     def update_stream(self, hidden_states, y):
+        if self.disable_filter:
+            return y + hidden_states
+
         return (
             self.stream_filter * y +
             (1 - self.stream_filter) * hidden_states
