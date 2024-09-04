@@ -270,13 +270,13 @@ class BaseXLATrainer:
             # add closure
             xm.add_step_closure(_post_step)
 
-        try:
-            self.save_checkpoint(
-                {'model': model},
-                curr_step
-            )
-        except:
-            log_master_print("Warning: final checkpoint save failed!")
+        # try:
+        self.save_checkpoint(
+            {'model': model},
+            curr_step
+        )
+        # except:
+        #     log_master_print("Warning: final checkpoint save failed!")
     
 
     def train_step(
