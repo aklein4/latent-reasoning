@@ -94,8 +94,10 @@ class BaseXLATrainer:
                 os.makedirs(tmp_path, exist_ok=True)
 
                 # try save in config transformers format
-                # try:
-                model.config.to_json_file(os.path.join(tmp_path, "config.json"))
+                try:
+                    model.config.to_json_file(os.path.join(tmp_path, "config.json"))
+                except Exception as e:
+                    log_master_print(e)
                 # model.config.save_pretrained(tmp_path, push_to_hub=False)
                 # except:
                 #     log_master_print(f"Warning: {name} config not saved!")
