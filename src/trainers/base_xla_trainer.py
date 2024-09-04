@@ -259,13 +259,13 @@ class BaseXLATrainer:
                 # save
                 self.log_step()
                 if curr_step % self.checkpoint_interval == 0:
-                    try:
+                    # try:
                         self.save_checkpoint(
                             {'model': model},
                             curr_step
                         )
-                    except:
-                        log_master_print("Warning: checkpoint save failed!")
+                    # except:
+                    #     log_master_print("Warning: checkpoint save failed!")
             
             # add closure
             xm.add_step_closure(_post_step)
