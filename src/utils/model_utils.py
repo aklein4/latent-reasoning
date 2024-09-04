@@ -94,6 +94,7 @@ class RotaryAttention(nn.Module):
         hidden_size,
         attention_head_size,
         num_attention_heads,
+        num_registers,
         use_rope,
         rope_fraction,
         max_sequence_length,
@@ -119,6 +120,15 @@ class RotaryAttention(nn.Module):
         else:
             self.rope = None
 
+        self.num_registers = num_registers
+        if self.num_registers > 0:
+            self.k_registers = nn.Parameter(
+                torch.randn(1, self.num_heads, self.num_registers, self.head_dim)
+            )
+            self.v_registers = nn.Parameter(
+                torch.randn(1, self.num_heads, self.num_registers, self.head_dim)
+            )
+
 
     def forward(
         self,
@@ -133,9 +143,9 @@ class RotaryAttention(nn.Module):
         # get shapes
         bsz, q_len, _ = query_states.shape
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
         # apply rope
         if self.use_rope:
@@ -144,6 +154,20 @@ class RotaryAttention(nn.Module):
         # update/apply cache
         if past_key_value is not None:
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx)
+
+        # apply registers
+        if self.num_registers > 0:
+            key_states = torch.cat((key_states, self.k_registers.expand(bsz, -1, -1, -1)), dim=2)
+            value_states = torch.cat((value_states, self.v_registers.expand(bsz, -1, -1, -1)), dim=2)
+
+            if attention_mask is not None:
+                attention_mask = torch.cat(
+                    [
+                        attention_mask,
+                        torch.zeros(*attention_mask.shape[:-1], self.num_registers, dtype=attention_mask.dtype, device=attention_mask.device)
+                    ],
+                    dim=-1
+                )
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3) / np.sqrt(self.head_dim))
         if attention_mask is not None:

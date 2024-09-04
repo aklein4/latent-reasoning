@@ -4,11 +4,8 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from transformers.activations import ACT2FN
-
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
-    SeperatedLayerNorm,
     FusedLinear,
     RotaryAttention,
     GLU
@@ -26,10 +23,10 @@ class SwiftConfig(XLAConfig):
             Size of the attention heads in the Transformer encoder
         num_attention_heads (`int`):
             Number of attention heads for each attention layer in the Transformer encoder.
+        num_registers (`int`):
+            Number of registers to use in the attention layer.
         num_layers (`int`):
             Number of hidden layers in the Transformer decoder.
-        use_qkv_bias (`bool`):
-            Whether or not the model should use bias for attention projections.
         hidden_act (`str` or `function`):
             The non-linear activation function (function or string).
         layer_norm_eps (`float`):
@@ -42,10 +39,6 @@ class SwiftConfig(XLAConfig):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
-        base_t (`float`):
-            The base gate value for the highway residual.
-        t_init_scale (`float`):
-            The scale of the initial gate weights.
     """
 
     model_type = 'base'
@@ -56,28 +49,27 @@ class SwiftConfig(XLAConfig):
         mlp_size,
         attention_head_size,
         num_attention_heads,
+        num_registers,
         num_layers,
-        use_qkv_bias,
         hidden_act,
         layer_norm_eps,
         use_rope,
         rope_fraction,
         rope_base,
         z_size,
-        base_t,
-        t_init_scale,   
         *args,
         **kwargs,
     ):
 
         self.hidden_size = hidden_size
         self.mlp_size = mlp_size
+
         self.attention_head_size = attention_head_size
         self.num_attention_heads = num_attention_heads
+        self.num_registers = num_registers
 
         self.num_layers = num_layers
 
-        self.use_qkv_bias = use_qkv_bias
         self.hidden_act = hidden_act
         self.layer_norm_eps = layer_norm_eps
         
@@ -87,64 +79,37 @@ class SwiftConfig(XLAConfig):
 
         self.z_size = z_size
 
-        self.base_t = base_t
-        self.t_init_scale = t_init_scale
-
         super().__init__(*args, **kwargs)
 
 
 class SwiftLayer(nn.Module):
-  
 
-    def special_init(self, config):
+    def special_init(self, config: SwiftConfig):
+
+        self.cross_proj.weight.data.zero_()
+        if self.cross_proj.bias is not None:
+            self.cross_proj.bias.data.zero_()
         
-        self.up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.up.total_in))
-        if self.up.linear.bias is not None:
-            self.up.linear.bias.data.zero_()
-        
-        self.z_proj.linear.weight.data.normal_(0.0, 1/np.sqrt(self.z_proj.total_in))
-        if self.z_proj.linear.bias is not None:
-            self.z_proj.linear.bias.data.zero_()
-
-        self.down.linear.weight.data.normal_(0.0, 1/np.sqrt(self.down.total_in))
-        if self.down.linear.bias is not None:
-            self.down.linear.bias.data.zero_()
-
-        self.down.linear.weight.data[-self.stream_size:] *= config.t_init_scale
-
-        self.up.special_inited = True
-        self.z_proj.special_inited = True
-        self.down.special_inited = True
-
-        self.up.linear.special_inited = True
-        self.z_proj.linear.special_inited = True
-        self.down.linear.special_inited = True
+        self.cross_proj.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
 
         self.hidden_size = config.hidden_size
         self.mlp_size = config.mlp_size
         self.qkv_size = config.attention_head_size * config.num_attention_heads
         self.z_size = config.z_size
 
-        assert self.hidden_size % 2 == 0, "Hidden size must be divisible by 2!"
-        self.stream_size = self.hidden_size // 2
-
         self.up = FusedLinear(
             self.hidden_size,
             [self.qkv_size]*3 + [self.mlp_size]*2 + [self.z_size]*3,
             bias=False
         )
-        self.z_proj = FusedLinear(
-            self.z_size,
-            [self.mlp_size]*2,
-            bias=False,
-        )
         self.down = FusedLinear(
-            [self.qkv_size, self.mlp_size],
-            [self.hidden_size, self.stream_size],
+            [self.qkv_size, self.mlp_size, self.z_size],
+            self.hidden_size,
             bias=False,
         )
 
@@ -152,20 +117,29 @@ class SwiftLayer(nn.Module):
             self.hidden_size,
             config.attention_head_size,
             config.num_attention_heads,
+            config.num_registers,
             config.use_rope,
             config.rope_fraction,
             config.max_sequence_length,
             config.rope_base,
-            layer_idx
+            self.layer_idx
         )
-        self.act = ACT2FN[config.hidden_act]
+        self.mlp = GLU(config.hidden_act)
 
-        self.norm = SeperatedLayerNorm(2, config.hidden_size, eps=config.layer_norm_eps)
-
-        base_t = max(1 / (2+layer_idx), config.base_t)
-        self.base_t = np.log(base_t / (1 - base_t))
+        self.norm = nn.LayerNorm(self.hidden_size, eps=config.layer_norm_eps, elementwise_affine=False)
+        self.norm_scale = nn.Parameter(torch.zeros(2, 1, 1, self.hidden_size))
+        self.norm_bias = nn.Parameter(torch.zeros(2, 1, 1, self.hidden_size))
+        self.cross_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
 
         self.z_scale = 1 / np.sqrt(config.num_layers * self.z_size)
+
+        k = torch.linspace(0, 1, self.hidden_size)
+        stream_filter = torch.maximum(
+            torch.exp(-2 * np.log(config.num_layers+1) * k),
+            torch.full_like(k, 1 / (layer_idx + 2))
+        )
+        stream_filter = stream_filter[None, None, :]
+        self.register_buffer('stream_filter', stream_filter, persistent=True)
 
 
     def forward(
@@ -178,17 +152,17 @@ class SwiftLayer(nn.Module):
     ):
         bs = hidden_states.shape[0]//2
 
-        q, k, v, gate, up, shift, mu, log_sigma = self.up(self.norm(hidden_states))
+        normed = self.norm(hidden_states.view(2, bs, *hidden_states.shape[-2:]))
+        x = normed * (self.norm_scale + 1) + self.norm_bias
+        x[0] = x[0] + self.cross_proj(normed[1]) # encoder gets info from decoder
+        x = x.view(*hidden_states.shape)
+
+        q, k, v, gate, up, shift, mu, log_sigma = self.up(x)
 
         shift = shift[bs:] # decoder is second half
         mu = mu[:bs] * self.z_scale # encoder is first half
         log_sigma = log_sigma[:bs] * self.z_scale
         sigma = F.softplus(log_sigma + np.log(np.e - 1))
-
-        z_scaled = (shift + mu + sigma * z).repeat(2, 1, 1)
-        z_gate, z_up = self.z_proj(z_scaled)
-        gate = gate + z_gate
-        up = up + z_up
 
         attn_out = self.attn(
             q, k, v,
@@ -196,29 +170,25 @@ class SwiftLayer(nn.Module):
             attention_mask=attention_mask,
             past_key_value=past_key_value
         )
-        mlp_out = self.act(gate) * up
-    
-        y, t = self.down(attn_out, mlp_out)
+        mlp_out = self.mlp(gate, up)
+        z_out = (shift + mu + sigma * z).repeat(2, 1, 1)
 
-        return self.update_streams(hidden_states, y, t), mu, sigma
+        y = self.down(attn_out, mlp_out, z_out)
+
+        return self.update_stream(hidden_states, y), mu, sigma
 
 
-    def update_streams(self, hidden_states, y, t):
-        gate = torch.sigmoid(t + self.base_t)
-
-        gated = (
-            gate * y[:, :, :self.stream_size] +
-            (1 - gate) * hidden_states[:, :, :self.stream_size]
+    def update_stream(self, hidden_states, y):
+        return (
+            self.stream_filter * y +
+            (1 - self.stream_filter) * hidden_states
         )
-
-        res = y[:, :, self.stream_size:] + hidden_states[:, :, self.stream_size:]
-
-        return torch.cat([gated, res], dim=-1)
 
 
 class SwiftModel(XLAModel):
 
     config_class = SwiftConfig
+
 
     def _init_weights(self, module):
 
@@ -263,7 +233,7 @@ class SwiftModel(XLAModel):
         )
 
         # lm modeling
-        self.norm = SeperatedLayerNorm(2, config.hidden_size, eps=config.layer_norm_eps)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
@@ -278,18 +248,18 @@ class SwiftModel(XLAModel):
         mask = mask.long()
         input_ids = input_ids + 1
 
-        hidden_states = self.vocab_embs(input_ids)
+        encoder_states = self.vocab_embs(input_ids)
         if self.use_rope:
-            encoder_states = hidden_states/2 + self.encoder_embs(mask)/2
+            encoder_states = encoder_states/2 + self.encoder_embs(mask)/2
         else:
-            encoder_states = hidden_states/3 + self.encoder_embs(mask)/3 + self.pos_embs(position_ids)/3
+            encoder_states = encoder_states/3 + self.encoder_embs(mask)/3 + self.pos_embs(position_ids)/3
 
         input_ids = torch.where(mask.bool(), torch.zeros_like(input_ids), input_ids)
-        hidden_states = self.vocab_embs(input_ids)
+        decoder_states = self.vocab_embs(input_ids)
         if self.use_rope:
-            decoder_states = hidden_states/2 + self.decoder_embs(mask)/2
+            decoder_states = decoder_states/2 + self.decoder_embs(mask)/2
         else:
-            decoder_states = hidden_states/3 + self.decoder_embs(mask)/3 + self.pos_embs(position_ids)/3
+            decoder_states = decoder_states/3 + self.decoder_embs(mask)/3 + self.pos_embs(position_ids)/3
 
         return torch.cat([encoder_states, decoder_states], dim=0)
 

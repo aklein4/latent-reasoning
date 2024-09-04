@@ -94,10 +94,10 @@ class BaseXLATrainer:
                 os.makedirs(tmp_path, exist_ok=True)
 
                 # try save in config transformers format
-                try:
-                    model.config.save_pretrained(tmp_path, push_to_hub=False)
-                except:
-                    log_master_print(f"Warning: {name} config not saved!")
+                # try:
+                model.config.save_pretrained(tmp_path, push_to_hub=False)
+                # except:
+                #     log_master_print(f"Warning: {name} config not saved!")
 
                 # try save state locally  
                 try:

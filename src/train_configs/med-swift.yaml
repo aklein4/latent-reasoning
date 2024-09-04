@@ -20,7 +20,7 @@ beta2: 0.95
 eps: 0.00000001
 weight_decay: 0.1
 
-checkpoint_interval: 5000
+checkpoint_interval: 10
 
 token_w: 10
 kl_w: 0.1
