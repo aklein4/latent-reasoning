@@ -95,15 +95,16 @@ class BaseXLATrainer:
 
                 # try save in config transformers format
                 # try:
-                model.config.save_pretrained(tmp_path, push_to_hub=False)
+                model.config.to_json_file(os.path.join(tmp_path, "config.json"))
+                # model.config.save_pretrained(tmp_path, push_to_hub=False)
                 # except:
                 #     log_master_print(f"Warning: {name} config not saved!")
 
                 # try save state locally  
-                try:
-                    xm.save(model.state_dict(), os.path.join(tmp_path, "state_dict.pt"))
-                except:
-                    log_master_print(f"ERROR: {name} STATE NOT SAVED!")
+                # try:
+                xm.save(model.state_dict(), os.path.join(tmp_path, "state_dict.pt"))
+                # except:
+                #     log_master_print(f"ERROR: {name} STATE NOT SAVED!")
 
                 # push to hub
                 api.upload_folder(
