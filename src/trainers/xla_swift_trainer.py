@@ -76,4 +76,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         )
         results.loss = self.loss(results.token_loss, results.kl_loss)
 
+        results.one_minus_acc = 1 - results.acc
+        results.one_minus_clip_perc = 1 - results.clip_perc
+
         return results
