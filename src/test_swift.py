@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-swift'
+MODEL_CONFIG = 'smed-swift'
 
 
 def main():
@@ -26,6 +26,8 @@ def main():
     print("loading model...")
     config = load_model_config(MODEL_CONFIG)
     model = SwiftModel(SwiftConfig(**config))
+
+    print(sum([p.numel() for p in model.parameters()]))
 
     logits, mus, sigmas = model(x, mask)
 
