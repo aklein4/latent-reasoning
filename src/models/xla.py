@@ -12,12 +12,12 @@ class XLAConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size,
-        max_sequence_length,
-        bos_token_id,
-        eos_token_id,
-        pad_token_id,
-        gradient_checkpointing,
+        vocab_size=None,
+        max_sequence_length=None,
+        bos_token_id=None,
+        eos_token_id=None,
+        pad_token_id=None,
+        gradient_checkpointing=False,
         *args,
         **kwargs,
     ):

@@ -45,18 +45,18 @@ class SwiftConfig(XLAConfig):
 
     def __init__(
         self,
-        hidden_size,
-        mlp_size,
-        attention_head_size,
-        num_attention_heads,
-        num_registers,
-        num_layers,
-        hidden_act,
-        layer_norm_eps,
-        use_rope,
-        rope_fraction,
-        rope_base,
-        z_size,
+        hidden_size=None,
+        mlp_size=None,
+        attention_head_size=None,
+        num_attention_heads=None,
+        num_registers=None,
+        num_layers=None,
+        hidden_act=None,
+        layer_norm_eps=None,
+        use_rope=None,
+        rope_fraction=None,
+        rope_base=None,
+        z_size=None,
         *args,
         **kwargs,
     ):
@@ -220,6 +220,7 @@ class SwiftModel(XLAModel):
         self.decoder_embs = nn.Embedding(2, config.hidden_size)
 
         # positional embeddings
+        assert config.use_rope is not None
         self.use_rope = config.use_rope
         if self.use_rope:
             self.pos_embs = None
