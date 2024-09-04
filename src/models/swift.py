@@ -218,6 +218,7 @@ class SwiftLayer(nn.Module):
 
 class SwiftModel(XLAModel):
 
+    config_class = SwiftConfig
 
     def _init_weights(self, module):
 
