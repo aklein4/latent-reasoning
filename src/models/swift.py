@@ -194,6 +194,34 @@ class SwiftLayer(nn.Module):
         return self.update_stream(hidden_states, y), mu, sigma
 
 
+    def sample(
+        self,
+        hidden_states,
+        z,
+        position_ids,
+        attention_mask=None,
+        past_key_value=None,
+    ):
+        
+        # use only encoder parameters
+        x = self.norm(hidden_states) * self.norm_scale[1] + self.norm_bias[1]
+
+        q, k, v, gate, up, shift, mu, log_sigma = self.up(x)
+
+        attn_out = self.attn(
+            q, k, v,
+            position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value
+        )
+        mlp_out = self.mlp(gate, up)
+        z_out = shift + z
+
+        y = self.down(attn_out, mlp_out, z_out)
+
+        return self.update_stream(hidden_states, y)
+
+
     def update_stream(self, hidden_states, y):
         if self.disable_filter:
             return y + hidden_states
@@ -264,9 +292,9 @@ class SwiftModel(XLAModel):
         return torch.arange(input_ids.shape[1], dtype=input_ids.dtype, device=input_ids.device)[None]
 
 
-    def get_hidden_states(self, input_ids, position_ids, mask):
-        mask = mask.long()
+    def get_encoder_states(self, input_ids, position_ids, mask):
         input_ids = input_ids + 1
+        mask = mask.long()
 
         encoder_states = self.vocab_embs(input_ids)
         if self.use_rope:
@@ -274,12 +302,26 @@ class SwiftModel(XLAModel):
         else:
             encoder_states = encoder_states/3 + self.encoder_embs(mask)/3 + self.pos_embs(position_ids)/3
 
-        input_ids = torch.where(mask.bool(), torch.zeros_like(input_ids), input_ids)
+        return encoder_states
+
+
+    def get_decoder_states(self, input_ids, position_ids, mask):
+        input_ids = torch.where(mask, torch.zeros_like(input_ids), input_ids+1)
+        mask = mask.long()
+
         decoder_states = self.vocab_embs(input_ids)
         if self.use_rope:
             decoder_states = decoder_states/2 + self.decoder_embs(mask)/2
         else:
             decoder_states = decoder_states/3 + self.decoder_embs(mask)/3 + self.pos_embs(position_ids)/3
+
+        return decoder_states
+
+
+    def get_hidden_states(self, input_ids, position_ids, mask):
+
+        encoder_states = self.get_encoder_states(input_ids, position_ids, mask)
+        decoder_states = self.get_decoder_states(input_ids, position_ids, mask)
 
         return torch.cat([encoder_states, decoder_states], dim=0)
 
@@ -317,3 +359,30 @@ class SwiftModel(XLAModel):
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, mus, sigmas
+
+
+    def sample(
+        self,
+        input_ids,
+        mask,
+        z=None
+    ):
+        bs, seq_len = input_ids.shape
+
+        position_ids = self._get_position_ids(input_ids)
+        decoder_states = self.get_decoder_states(input_ids, position_ids, mask)
+
+        if z is None:
+            z = torch.randn(
+                [self.num_layers, bs, seq_len, self.config.z_size],
+                device=input_ids.device, dtype=decoder_states.dtype
+            )
+
+        for idx, layer in enumerate(self.layers):
+            decoder_states = layer.sample(
+                decoder_states, z[idx], position_ids
+            )
+
+        lm_logits = self.lm_head(self.norm(decoder_states))
+
+        return torch.argmax(lm_logits, dim=-1)
