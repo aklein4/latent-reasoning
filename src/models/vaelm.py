@@ -358,6 +358,7 @@ class VaeLmModel(XLAModel):
 
             if self.gradient_checkpointing:
                 encoder_states, m, s, z_out = self._gradient_checkpointing_func(
+                    self,
                     layer.__call__,
                     True,
                     encoder_states,
@@ -428,6 +429,7 @@ class VaeLmModel(XLAModel):
 
             if self.gradient_checkpointing:
                 decoder_states, m, s = self._gradient_checkpointing_func(
+                    self,
                     layer.__call__,
                     False,
                     decoder_states,
