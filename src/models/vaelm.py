@@ -280,6 +280,9 @@ class VaeLmModel(XLAModel):
         self.z_size = config.z_size
         self.layer_z_size = config.z_size // config.num_layers
 
+        # gradient checkpointing
+        self.gradient_checkpointing = False
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -350,15 +353,27 @@ class VaeLmModel(XLAModel):
         enc_sigmas = []
         for idx, layer in enumerate(self.layers):
 
-            encoder_states, m, s, z_out = layer(
-                is_encoder=True,
-                hidden_states=encoder_states,
-                state_types=encoder_types,
-                position_ids=position_ids,
-                noise=enc_noise[:, :, idx],
-                z_in=None,
-                attention_mask=mask
-            )
+            if self.gradient_checkpointing:
+                encoder_states, m, s, z_out = self._gradient_checkpointing_func(
+                    layer.__call__,
+                    True,
+                    encoder_states,
+                    encoder_types,
+                    position_ids,
+                    enc_noise[:, :, idx],
+                    None,
+                    mask
+                )
+            else:
+                encoder_states, m, s, z_out = layer(
+                    is_encoder=True,
+                    hidden_states=encoder_states,
+                    state_types=encoder_types,
+                    position_ids=position_ids,
+                    noise=enc_noise[:, :, idx],
+                    z_in=None,
+                    attention_mask=mask
+                )
 
             # take only the thought vectors
             z.append(z_out[:, -self.thought_length:])
@@ -408,15 +423,27 @@ class VaeLmModel(XLAModel):
         dec_sigmas = []
         for idx, layer in enumerate(self.layers):
 
-            decoder_states, m, s = layer(
-                is_encoder=False,
-                hidden_states=decoder_states,
-                state_types=decoder_types,
-                position_ids=position_ids,
-                noise=None,
-                z_in=dec_z[:, :, idx],
-                attention_mask=mask
-            )
+            if self.gradient_checkpointing:
+                decoder_states, m, s = self._gradient_checkpointing_func(
+                    layer.__call__,
+                    False,
+                    decoder_states,
+                    decoder_types,
+                    position_ids,
+                    None,
+                    dec_z[:, :, idx],
+                    mask
+                )
+            else:
+                decoder_states, m, s = layer(
+                    is_encoder=False,
+                    hidden_states=decoder_states,
+                    state_types=decoder_types,
+                    position_ids=position_ids,
+                    noise=None,
+                    z_in=dec_z[:, :, idx],
+                    attention_mask=mask
+                )
 
             # take only the thought vectors (last thought token does not generate)
             dec_mus.append(m[:, :self.thought_length])
