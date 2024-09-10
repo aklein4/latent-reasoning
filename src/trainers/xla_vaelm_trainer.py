@@ -14,7 +14,7 @@ class XLAVaeLmTrainer(BaseXLATrainer):
 
     def train_step(self, step, model, x):
 
-        logits, enc_mu, enc_sigma, dec_mu, dec_sigma = model(x)
+        logits, enc_mu, enc_sigma, dec_mu, dec_sigma = model(x, reparam_scale=self.reparam_scale)
         
         # kl divergence per token
         kl = (
@@ -33,7 +33,9 @@ class XLAVaeLmTrainer(BaseXLATrainer):
             pcorr=pcorr(logits, x),
         )
         results.nelbo = results.token_loss + results.kl
-        results.loss = results.token_loss + beta * results.kl
         results.beta = beta * torch.ones_like(results.kl)
+
+        results.loss_unscaled = results.token_loss + beta * results.kl
+        results.loss = 2 * results.loss / (1 + self.reparam_scale)
 
         return results

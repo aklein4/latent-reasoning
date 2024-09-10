@@ -25,4 +25,4 @@ checkpoint_interval: 5000
 kl_beta_start: 0.0
 kl_beta_steps: 2000
 
-reparam_scale: 1.0
+reparam_scale: 10.0

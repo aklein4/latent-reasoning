@@ -43,6 +43,8 @@ class VaeLmConfig(XLAConfig):
             The length of the thought vectors.
         z_size (`int`):
             The size of the latent space.
+        z_over_scale (`float`):
+            The scale of the z values.
     """
 
     model_type = 'base'
@@ -62,6 +64,7 @@ class VaeLmConfig(XLAConfig):
         rope_base=None,
         thought_length=None,
         z_size=None,
+        z_over_scale=None,
         *args,
         **kwargs,
     ):
@@ -84,6 +87,7 @@ class VaeLmConfig(XLAConfig):
 
         self.thought_length = thought_length
         self.z_size = z_size
+        self.z_over_scale = z_over_scale
 
         super().__init__(*args, **kwargs)
 
@@ -154,7 +158,7 @@ class VaeLmLayer(nn.Module):
         self.down_out_scales = nn.Embedding(4, self.hidden_size)
 
         # rescale z for better kl
-        self.z_scale = 1 / np.sqrt(config.z_size)
+        self.z_scale = np.sqrt(config.z_over_scale / config.z_size)
 
 
     def forward(
@@ -307,6 +311,7 @@ class VaeLmModel(XLAModel):
     def forward(
         self,
         input_ids,
+        reparam_scale=None
     ):
         bs, seq_len = input_ids.shape
 
@@ -386,6 +391,11 @@ class VaeLmModel(XLAModel):
         z = torch.stack(z, dim=2)
         enc_mus = torch.stack(enc_mus, dim=2)
         enc_sigmas = torch.stack(enc_sigmas, dim=2)
+
+        if reparam_scale is not None:
+            z = z * reparam_scale + ((1-reparam_scale) * z).detach()
+            enc_mus = enc_mus * reparam_scale + ((1-reparam_scale) * enc_mus).detach()
+            enc_sigmas = enc_sigmas * reparam_scale + ((1-reparam_scale) * enc_sigmas).detach()
 
         """ Decoder """
 
