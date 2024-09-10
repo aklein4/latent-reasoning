@@ -219,7 +219,6 @@ class BaseXLATrainer:
                 
                 # gradient reduction is done by averaging across devices, summing across mini batches
                 results.loss.backward()
-                log_master_print(xm.get_stablehlo())
 
                 # mark step if using gradient accumulation
                 if len(results_accum) > 1:
