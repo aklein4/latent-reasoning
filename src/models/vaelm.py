@@ -173,8 +173,8 @@ class VaeLmLayer(nn.Module):
         q, k, v, gate, up, enc_mu, enc_log_sigma, dec_mu, dec_log_sigma = self.up(
             self.norm(hidden_states),
             in_scale=(self.up_in_scales(state_types)+1),
-            scale=(self.up_out_scales(state_types)+1),
-            bias=self.up_out_biases(state_types)
+            # scale=(self.up_out_scales(state_types)+1),
+            # bias=self.up_out_biases(state_types)
         )
 
         # discard the unused latent params
@@ -210,7 +210,7 @@ class VaeLmLayer(nn.Module):
         # apply down operator (out scale is reszero)
         hidden_states = hidden_states + self.down(
             attn_out, mlp_out, z_in, z_out,
-            in_scale=(self.down_in_scales(state_types)+1),
+            # in_scale=(self.down_in_scales(state_types)+1),
             scale=self.down_out_scales(state_types)
         )
 
