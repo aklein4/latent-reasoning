@@ -48,5 +48,5 @@ class SimpleCollator:
         elif out.shape[1] > self.seq_length:
             out = out[:, :self.seq_length]
 
-        return out
+        return (out,)
     
