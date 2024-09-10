@@ -15,7 +15,7 @@ class SimpleCollator:
         self,
         sequence_length: int,
     ):
-        self.sequence_length = sequence_length
+        self.seq_length = sequence_length
         
 
     def __call__(
