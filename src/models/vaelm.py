@@ -11,7 +11,6 @@ from utils.model_utils import (
     RotaryAttention,
     GLU
 )
-from utils.logging_utils import log_print
 
 
 class VaeLmConfig(XLAConfig):
@@ -355,7 +354,6 @@ class VaeLmModel(XLAModel):
         for idx, layer in enumerate(self.layers):
 
             if self.gradient_checkpointing:
-                log_print("enc grad")
                 encoder_states, m, s, z_out = self._gradient_checkpointing_func(
                     layer.__call__,
                     True,
@@ -426,7 +424,6 @@ class VaeLmModel(XLAModel):
         for idx, layer in enumerate(self.layers):
 
             if self.gradient_checkpointing:
-                log_print("dec grad")
                 decoder_states, m, s = self._gradient_checkpointing_func(
                     layer.__call__,
                     False,
