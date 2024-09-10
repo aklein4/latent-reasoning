@@ -34,6 +34,6 @@ class XLAVaeLmTrainer(BaseXLATrainer):
         )
         results.nelbo = results.token_loss + results.kl
         results.loss = results.token_loss + beta * results.kl
-        results.beta = beta * torch.ones_like(kl)
+        results.beta = beta * torch.ones_like(results.kl)
 
         return results
