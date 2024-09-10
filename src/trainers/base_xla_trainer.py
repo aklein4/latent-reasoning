@@ -200,6 +200,7 @@ class BaseXLATrainer:
                 # get results from train step
                 with autocast(constants.XLA_DEVICE()):
                     results = self.train_step(
+                        curr_step,
                         model,
                         *mini_batch
                     )
