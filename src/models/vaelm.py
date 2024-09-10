@@ -11,6 +11,7 @@ from utils.model_utils import (
     RotaryAttention,
     GLU
 )
+from utils.logging_utils import log_print
 
 
 class VaeLmConfig(XLAConfig):
@@ -167,6 +168,8 @@ class VaeLmLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
+        if self.attn.layer_idx == 0:
+            log_print(torch.is_grad_enabled())
 
         # get operators, using per-function affine (scales add one for better decay)
         q, k, v, gate, up, enc_mu, enc_log_sigma, dec_mu, dec_log_sigma = self.up(
