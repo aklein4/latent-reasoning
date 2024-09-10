@@ -2,10 +2,12 @@
 
 from loaders.packed import PackedCollator
 from loaders.seq2seq import Seq2SeqCollator
+from loaders.simple import SimpleCollator
 
 COLLATOR_DICT = {
     "packed": PackedCollator,
-    "seq2seq": Seq2SeqCollator
+    "seq2seq": Seq2SeqCollator,
+    "simple": SimpleCollator
 }
 
 
