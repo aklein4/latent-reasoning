@@ -30,7 +30,7 @@ def main():
 
     # print(out)
     kl = torch.log(dec_sigmas/enc_sigmas) + (enc_sigmas**2 + (enc_mus - dec_mus)**2)/(2*(dec_sigmas**2)) - 0.5
-    print(kl.sum(-1).sum(-1))
+    print(kl.sum(-1).sum(-1).mean())
 
 
 if __name__ == '__main__':

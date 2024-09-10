@@ -36,6 +36,6 @@ class XLAVaeLmTrainer(BaseXLATrainer):
         results.beta = beta * torch.ones_like(results.kl)
 
         results.loss_unscaled = results.token_loss + beta * results.kl
-        results.loss = 2 * results.loss / (1 + self.reparam_scale)
+        results.loss = 2 * results.loss_unscaled / (1 + self.reparam_scale)
 
         return results

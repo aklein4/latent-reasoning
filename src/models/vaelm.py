@@ -108,6 +108,13 @@ class VaeLmLayer(nn.Module):
         self.down_in_scales.special_inited = True
         self.down_out_scales.special_inited = True
 
+        self.up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.hidden_size))
+        self.up.linear.weight.data[-2*self.layer_z_size:].zero_()
+        if self.up.linear.bias is not None:
+            self.up.linear.bias.data.zero_()
+        
+        self.up.linear.special_inited = True
+
 
     def __init__(self, config: VaeLmConfig, layer_idx: int):
         super().__init__()
