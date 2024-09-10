@@ -407,7 +407,7 @@ class _ModelCheckpointFunction(torch.autograd.Function):
         for inp in detached_inputs
     )
 
-    return (None,) + grads
+    return (None,None) + grads
 
 
 def model_checkpoint(model, function, *args):
