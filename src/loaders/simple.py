@@ -32,7 +32,7 @@ class SimpleCollator:
         input_ids = [torch.tensor(x.astype(np.int64)).long() for x in input_ids]
 
         # pad into single tensor
-        input_ids = nn.utils.rnn.pad_sequence(
+        out = nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
             padding_value=constants.GPT2_PAD_TOKEN,
@@ -48,5 +48,5 @@ class SimpleCollator:
         elif out.shape[1] > self.seq_length:
             out = out[:, :self.seq_length]
 
-        return input_ids
+        return out
     
