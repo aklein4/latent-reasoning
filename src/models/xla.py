@@ -6,6 +6,7 @@ from transformers.modeling_utils import PretrainedConfig, PreTrainedModel
 
 from utils.model_utils import model_checkpoint
 from utils.logging_utils import log_print
+import utils.constants as constants
 
 
 class XLAConfig(PretrainedConfig):
@@ -75,7 +76,8 @@ class XLAModel(PreTrainedModel):
         gradient_checkpointing_func = functools.partial(model_checkpoint, **gradient_checkpointing_kwargs)
         self._set_gradient_checkpointing(enable=True, gradient_checkpointing_func=gradient_checkpointing_func)
         
-        log_print(f"Gradient checkpointing enabled for {self.__class__.__name__}: {self.gradient_checkpointing}")
+        if constants.XLA_AVAILABLE:
+            log_print(f"Gradient checkpointing enabled for {self.__class__.__name__}: {self.gradient_checkpointing}")
 
 
     def __init__(self, *args, fast_start=False, **kwargs):

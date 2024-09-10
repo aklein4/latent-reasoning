@@ -21,7 +21,7 @@ class XLAVaeLmTrainer(BaseXLATrainer):
             torch.log(dec_sigma) - torch.log(enc_sigma)
             + (enc_sigma**2 + (enc_mu - dec_mu)**2) / (2 * (dec_sigma**2))
             - 0.5
-        ).sum(-1).sum(-1) / x.shape[1]
+        ).sum(-1).sum(-1).sum(-1) / x.shape[1]
 
         # get beta based on the global stap
         beta = self.kl_beta_start + min(step/self.kl_beta_steps, 1) * (1 - self.kl_beta_start)

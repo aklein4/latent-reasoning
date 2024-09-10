@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-vaelm'
+MODEL_CONFIG = 'test-vaelm'
 
 
 def main():
@@ -26,11 +26,23 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = VaeLmModel(VaeLmConfig(**config))
 
-    out, enc_mus, enc_sigmas, dec_mus, dec_sigmas = model(x)
+    def pack_hook(x):
+        print(f"packing {x.shape}")
+        return x
 
-    # print(out)
-    kl = torch.log(dec_sigmas/enc_sigmas) + (enc_sigmas**2 + (enc_mus - dec_mus)**2)/(2*(dec_sigmas**2)) - 0.5
-    print(kl.sum(-1).sum(-1))
+    def unpack_hook(x):
+        print(f"unpacking {x.shape}")
+        return x
+
+    with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
+        out, enc_mus, enc_sigmas, dec_mus, dec_sigmas = model(x)
+
+        # print(out)
+        kl = torch.log(dec_sigmas/enc_sigmas) + (enc_sigmas**2 + (enc_mus - dec_mus)**2)/(2*(dec_sigmas**2)) - 0.5
+        # print(kl.sum(-1).sum(-1))
+
+        loss = out.sum() + kl.sum()
+        loss.backward()
 
 
 if __name__ == '__main__':
