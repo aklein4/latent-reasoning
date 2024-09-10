@@ -8,29 +8,29 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
-class SeperatedLayerNorm(nn.Module):
-
-    def __init__(self, num_groups, num_features, eps=1e-5, affine=True):
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6, affine=True):
         super().__init__()
 
-        self.num_groups = num_groups
-        self.num_features = num_features
-        self.eps = eps
         self.affine = affine
+        self.weight = None
+        if affine:
+            self.weight = nn.Parameter(torch.zeros(1, 1, hidden_size))
+        
+        self.variance_epsilon = eps
 
-        self.group_norm = nn.GroupNorm(
-            num_groups, num_features,
-            eps=eps, affine=affine
-        )
 
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
 
-    def forward(self, x):
-        og_shape = x.shape
-
-        x = x.view(-1, self.num_features)
-        x = self.group_norm(x)
-
-        return x.view(*og_shape)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        
+        if self.affine:
+            hidden_states = hidden_states * (1+self.weight)
+        
+        return hidden_states.to(input_dtype)
 
 
 class FusedLinear(nn.Module):
@@ -64,7 +64,7 @@ class FusedLinear(nn.Module):
         raise ValueError(f'expected inputs of size {self.in_feature_list}, got {[v.shape[-1] for v in inputs]}')
 
 
-    def forward(self, *inputs):
+    def forward(self, *inputs, in_scale=None, scale=None, bias=None):
         if len(inputs) != len(self.in_feature_list):
             self._error_message(inputs)
 
@@ -75,7 +75,15 @@ class FusedLinear(nn.Module):
         if x.shape[-1] != self.total_in:
             self._error_message(inputs)
 
+        if in_scale is not None:
+            x = x * in_scale
+
         x = self.linear(x)
+
+        if scale is not None:
+            x = x * scale
+        if bias is not None:
+            x = x + bias
 
         if len(self.out_feature_list) == 1:
             return x
