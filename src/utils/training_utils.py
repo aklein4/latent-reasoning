@@ -9,7 +9,8 @@ def loss(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None
+    extra_mask=None,
+    shift=True
 ) -> torch.Tensor:
     """ Standard cross-entropy loss for language modeling.
      - applies offset so that logits_{t} predicts x_{t+1}
@@ -23,8 +24,12 @@ def loss(
     Returns:
         torch.Tensor: cross-entropy loss [nats]
     """
-    x = x[:, 1:].view(-1)
-    logits = logits[:, :-1].view(-1, logits.shape[-1])
+    if shift:
+        x = x[:, 1:].view(-1)
+        logits = logits[:, :-1].view(-1, logits.shape[-1])
+    else:
+        x = x.view(-1)
+        logits = logits.view(-1, logits.shape[-1])
     
     mask = x != ignore_index
     if extra_mask is not None:
@@ -44,7 +49,8 @@ def ppl(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None
+    extra_mask=None,
+    shift=True
 ) -> torch.Tensor:
     """ Compute perplexity of the model.
      - uses same data logic as loss()
@@ -57,8 +63,12 @@ def ppl(
     Returns:
         torch.Tensor: Perplexity [nats]
     """
-    x = x[:, 1:]
-    logits = logits[:, :-1]
+    if shift:
+        x = x[:, 1:]
+        logits = logits[:, :-1]
+    else:
+        x = x
+        logits = logits
 
     mask = x != ignore_index
     if extra_mask is not None:
@@ -81,7 +91,8 @@ def acc(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None
+    extra_mask=None,
+    shift=True
 ) -> torch.Tensor:
     """ Compute top-1 next-token accuracy of the model.
      - uses same data logic as loss()
@@ -94,7 +105,10 @@ def acc(
     Returns:
         torch.Tensor: top-1 token accuracy
     """
-    x, logits = x[:, 1:], logits[:, :-1]
+    if shift:
+        x, logits = x[:, 1:], logits[:, :-1]
+    else:
+        x, logits = x, logits
 
     mask = x != ignore_index
     if extra_mask is not None:
@@ -112,7 +126,8 @@ def pcorr(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None
+    extra_mask=None,
+    shift=True
 ) -> torch.Tensor:
     """ Compute token prediction probability of the model.
      - measures probability that a token sampled from logits is equal to target token
@@ -126,9 +141,13 @@ def pcorr(
     Returns:
         torch.Tensor: next-token prediction probability
     """
-    x = x[:, 1:].contiguous().view(-1)
-    logits = logits[:, :-1].contiguous().view(-1, logits.shape[-1])
-    
+    if shift:
+        x = x[:, 1:].contiguous().view(-1)
+        logits = logits[:, :-1].contiguous().view(-1, logits.shape[-1])
+    else:
+        x = x.contiguous().view(-1)
+        logits = logits.contiguous().view(-1, logits.shape[-1])
+
     mask = x != ignore_index
     if extra_mask is not None:
         mask = mask & extra_mask.view(-1)

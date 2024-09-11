@@ -14,6 +14,22 @@ from utils.model_utils import (
 from utils.logging_utils import log_print
 
 
+def _get_position_ids(x: torch.LongTensor):
+    # simple sequential position ids
+    return torch.arange(x.shape[1], dtype=torch.long, device=x.device)[None]
+
+
+def _get_mask(x: torch.LongTensor):
+    # simple causal mask
+    mask = torch.ones(x.shape[1], x.shape[1], dtype=torch.bool, device=x.device)
+    mask = torch.triu(mask, diagonal=1)
+    return torch.masked_fill(
+        torch.zeros_like(mask).float(),
+        mask,
+        float('-inf')
+    )[None, None]
+
+
 class VaeLmConfig(XLAConfig):
     """
     Args:
@@ -95,18 +111,8 @@ class VaeLmConfig(XLAConfig):
 class VaeLmLayer(nn.Module):
 
     def special_init(self, config: VaeLmConfig):
-
-        self.up_in_scales.weight.data.zero_()
-        self.up_out_scales.weight.data.zero_()
-        self.up_out_biases.weight.data.zero_()
-        self.down_in_scales.weight.data.zero_()
-        self.down_out_scales.weight.data.zero_()
-
-        self.up_in_scales.special_inited = True
-        self.up_out_scales.special_inited = True
-        self.up_out_biases.special_inited = True
-        self.down_in_scales.special_inited = True
-        self.down_out_scales.special_inited = True
+        if self.is_encoder:
+            return
 
         self.up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.hidden_size))
         self.up.linear.weight.data[-2*self.layer_z_size:].zero_()
@@ -116,8 +122,9 @@ class VaeLmLayer(nn.Module):
         self.up.linear.special_inited = True
 
 
-    def __init__(self, config: VaeLmConfig, layer_idx: int):
+    def __init__(self, config: VaeLmConfig, layer_idx: int, is_encoder):
         super().__init__()
+        self.is_encoder = is_encoder
 
         # basic shapes
         self.hidden_size = config.hidden_size
@@ -127,14 +134,17 @@ class VaeLmLayer(nn.Module):
         assert config.z_size % config.num_layers == 0
         self.layer_z_size = config.z_size // config.num_layers
 
+        # input norm
+        self.norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=True)
+
         # linear projections
         self.up = FusedLinear(
             self.hidden_size,
-            [self.qkv_size]*3 + [self.mlp_size]*2 + [self.layer_z_size]*4,
-            bias=False
+            [self.qkv_size]*3 + [self.mlp_size]*2 + [self.layer_z_size]*2,
+            bias=True
         )
         self.down = FusedLinear(
-            [self.qkv_size, self.mlp_size, self.layer_z_size, self.layer_z_size],
+            [self.qkv_size, self.mlp_size, self.layer_z_size],
             self.hidden_size,
             bias=False,
         )
@@ -153,48 +163,26 @@ class VaeLmLayer(nn.Module):
         )
         self.mlp = GLU(config.hidden_act)
 
-        # input norm (no affine)
-        self.norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=False)
-
-        # per-function scales and biases
-        self.up_in_scales = nn.Embedding(4, self.hidden_size)
-        self.up_out_scales = nn.Embedding(4, self.up.total_out)
-        self.up_out_biases = nn.Embedding(4, self.up.total_out)
-
-        self.down_in_scales = nn.Embedding(4, self.down.total_in)
-        self.down_out_scales = nn.Embedding(4, self.hidden_size)
-
         # rescale z for better kl
         self.z_scale = np.sqrt(config.z_over_scale / config.z_size)
 
 
     def forward(
         self,
-        is_encoder,
         hidden_states,
-        state_types,
         position_ids,
         noise=None,
         z_in=None,
         attention_mask=None,
         past_key_value=None,
     ):
+        if self.is_encoder:
+            assert z_in is None and noise is not None
+        else:
+            assert noise is None and z_in is not None
 
         # get operators, using per-function affine (scales add one for better decay)
-        q, k, v, gate, up, enc_mu, enc_log_sigma, dec_mu, dec_log_sigma = self.up(
-            self.norm(hidden_states),
-            in_scale=(self.up_in_scales(state_types)+1),
-            # scale=(self.up_out_scales(state_types)+1),
-            # bias=self.up_out_biases(state_types)
-        )
-
-        # discard the unused latent params
-        if is_encoder:
-            mu = enc_mu
-            log_sigma = enc_log_sigma
-        else:
-            mu = dec_mu
-            log_sigma = dec_log_sigma
+        q, k, v, gate, up, mu, log_sigma = self.up(self.norm(hidden_states))
 
         # apply operators
         attn_out = self.attn(
@@ -209,27 +197,230 @@ class VaeLmLayer(nn.Module):
         mu = mu * self.z_scale
         sigma = F.softplus(log_sigma * self.z_scale + np.log(np.e - 1))
         
-        # if encoder, apply reparametrization for z_out, ignore z_in
-        if is_encoder:
-            z_out = mu + sigma * noise
-            z_in = torch.zeros_like(z_out)
-
-        # if decoder, use z_in, ignore z_out
+        # if encoder, apply reparametrization for z, otherwise use z_in
+        if self.is_encoder:
+            z = mu + sigma * noise
         else:
-            z_out = torch.zeros_like(z_in)
+            z = z_in
 
         # apply down operator (out scale is reszero)
-        hidden_states = hidden_states + self.down(
-            attn_out, mlp_out, z_in, z_out,
-            # in_scale=(self.down_in_scales(state_types)+1),
-            scale=self.down_out_scales(state_types)
-        )
+        hidden_states = hidden_states + self.down(attn_out, mlp_out, z)
 
         # only return z_out if encoder
-        if is_encoder:
-            return hidden_states, mu, sigma, z_out
+        if self.is_encoder:
+            return hidden_states, mu, sigma, z
 
         return hidden_states, mu, sigma
+
+
+class VaeLmEncoder(nn.Module):
+
+    def __init__(self, config: VaeLmConfig):
+        super().__init__()
+
+        # basic shapes
+        self.hidden_size = config.hidden_size
+        self.z_size = config.z_size
+        self.layer_z_size = config.z_size // config.num_layers
+        self.thought_length = config.thought_length
+        self.num_layers = config.num_layers
+
+        # vocab inputs
+        self.vocab_embs = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.vocab_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
+
+        # encoder inputs
+        self.in_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
+        self.thought_embs = nn.Parameter(torch.randn([1, self.thought_length, config.hidden_size]))
+        self.thought_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
+
+        # layers
+        self.layers = nn.ModuleList(
+            [VaeLmLayer(config, layer_idx, is_encoder=True) for layer_idx in range(config.num_layers)]
+        )
+
+        self.gradient_checkpointing = False
+
+
+    def forward(
+        self,
+        input_ids,
+        noise,
+        reparam_scale=None
+    ):
+        bs, seq_len = input_ids.shape
+
+        # basic vocab tokens
+        vocab_tokens = (
+            self.vocab_embs(input_ids) +
+            self.vocab_switch
+        ) / np.sqrt(2)
+
+        # encoder takes noise shifted to the right by one [bs, T, L, zD], removing last
+        encoder_tokens = (
+            self.thought_embs +
+            self.thought_switch +
+            self.in_proj(
+                torch.cat(
+                    [
+                        torch.zeros_like(noise[:, :1].view(bs, -1, self.z_size)),
+                        noise[:, :-1].view(bs, -1, self.z_size)
+                    ],
+                    dim=1
+                )
+            )
+        ) / np.sqrt(3)
+
+        # combine
+        hidden_states = torch.cat([vocab_tokens, encoder_tokens], dim=1)
+        position_ids = None
+        mask = _get_mask(hidden_states)
+
+        # insert zero noise for the enc vocab tokens
+        padded_noise = torch.cat(
+            [
+                torch.zeros([bs, seq_len, self.num_layers, self.layer_z_size], device=noise.device, dtype=noise.dtype),
+                noise,
+            ],
+            dim=1
+        )
+
+        # run layers
+        z = []
+        mus = []
+        sigmas = []
+        for ind, layer in enumerate(self.layers):
+            hidden_states, mu, sigma, z_curr = layer(
+                hidden_states,
+                position_ids,
+                noise=padded_noise[:, :, ind],
+                attention_mask=mask
+            )
+
+            z.append(z_curr[:, -encoder_tokens.shape[1]:])
+            mus.append(mu[:, -encoder_tokens.shape[1]:])
+            sigmas.append(sigma[:, -encoder_tokens.shape[1]:])
+
+        # [bs, T, L, zD]
+        z = torch.stack(z, dim=2)
+        mus = torch.stack(mus, dim=2)
+        sigmas = torch.stack(sigmas, dim=2)
+
+        # apply reparametrization
+        if reparam_scale is not None:
+            z = z * reparam_scale + ((1-reparam_scale) * z).detach()
+            mus = mus * reparam_scale + ((1-reparam_scale) * mus).detach()
+            sigmas = sigmas * reparam_scale + ((1-reparam_scale) * sigmas).detach()
+
+        return z, mus, sigmas
+
+
+class VaeLmDecoder(nn.Module):
+
+    def __init__(self, config: VaeLmConfig):
+        super().__init__()
+
+        # basic shapes
+        self.hidden_size = config.hidden_size
+        self.z_size = config.z_size
+        self.layer_z_size = config.z_size // config.num_layers
+        self.thought_length = config.thought_length
+        self.num_layers = config.num_layers
+
+        # vocab inputs
+        self.vocab_start = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
+        self.vocab_embs = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.vocab_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
+
+        # decoder inputs (extra emb for dummy end token)
+        self.in_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
+        self.thought_embs = nn.Parameter(torch.randn([1, self.thought_length+1, config.hidden_size]))
+        self.thought_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
+
+        # layers
+        self.layers = nn.ModuleList(
+            [VaeLmLayer(config, layer_idx, is_encoder=False) for layer_idx in range(config.num_layers)]
+        )
+
+        # lm modeling
+        self.norm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        self.gradient_checkpointing = False
+
+
+    def forward(
+        self,
+        input_ids,
+        z,
+    ):
+        bs, seq_len = input_ids.shape
+
+        # vocab tokens get start token added, and remove the last token
+        vocab_tokens = (
+            torch.cat(
+                [
+                    self.vocab_start.expand(bs, -1, -1),
+                    self.vocab_embs(input_ids[:, :-1])
+                ],
+                dim=1
+             ) +
+            self.vocab_switch
+        ) / np.sqrt(2)
+
+        # decoder takes z with shift to the right by one [bs, T+1, L, zD], keeping last
+        decoder_tokens = (
+            self.thought_embs +
+            self.thought_switch +
+            self.in_proj(
+                torch.cat(
+                    [
+                        torch.zeros_like(z[:, :1].view(bs, -1, self.z_size)),
+                        z.view(bs, -1, self.z_size)
+                    ],
+                    dim=1
+                )
+            )
+        ) / np.sqrt(3)
+
+        # combine
+        hidden_states = torch.cat([decoder_tokens, vocab_tokens], dim=1)
+        position_ids = None
+        mask = _get_mask(hidden_states)
+
+        # insert zero z for the vocab tokens, and a zero for the first thought
+        padded_z = torch.cat(
+            [
+                torch.zeros_like(z[:, :1]),
+                z,
+                torch.zeros_like(z[:, :1]).expand(-1, vocab_tokens.shape[1], -1, -1)
+            ],
+            dim=1
+        )
+
+        # run layers
+        mus = []
+        sigmas = []
+        for ind, layer in enumerate(self.layers):
+            hidden_states, mu, sigma = layer(
+                hidden_states,
+                position_ids,
+                z_in=padded_z[:, :, ind],
+                attention_mask=mask
+            )
+
+            mus.append(mu[:, :self.thought_length])
+            sigmas.append(sigma[:, :self.thought_length])
+
+        mus = torch.stack(mus, dim=2)
+        sigmas = torch.stack(sigmas, dim=2)
+
+        # take only the LM states, starting with the start token
+        lm_states = self.norm(hidden_states[:, -vocab_tokens.shape[1]:])
+        lm_logits = self.lm_head(lm_states)
+        lm_logits = F.log_softmax(lm_logits, dim=-1)
+
+        return lm_logits, mus, sigmas
 
 
 class VaeLmModel(XLAModel):
@@ -261,226 +452,37 @@ class VaeLmModel(XLAModel):
         self.vocab_size = config.vocab_size
         self.max_sequence_length = config.max_sequence_length
         self.thought_length = config.thought_length
+        self.z_size = config.z_size
+        self.layer_z_size = config.z_size // config.num_layers
+        self.num_layers = config.num_layers
 
-        # embeddings
-        self.vocab_embs = nn.Embedding(config.vocab_size, config.hidden_size)
-        # encoder gets one token per thought
-        self.encoder_embs = nn.Parameter(torch.randn([1, self.thought_length, config.hidden_size]))
-        # decoder gets one token per thought + extra intake token
-        self.decoder_embs = nn.Parameter(torch.randn([1, self.thought_length+1, config.hidden_size]))
-        # start token to generate first output
-        self.decoder_start = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
-
-        # input projections (project from z to hidden size)
-        self.encoder_in_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
-        self.decoder_in_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
+        # models
+        self.encoder = VaeLmEncoder(config)
+        self.decoder = VaeLmDecoder(config)
 
         # positional embeddings
         assert config.use_rope is not None and config.use_rope, "RoPE embeddings are required for VaeLm!"
-
-        # layers
-        self.num_layers = config.num_layers
-        self.layers = nn.ModuleList(
-            [VaeLmLayer(config, layer_idx) for layer_idx in range(config.num_layers)]
-        )
-
-        # lm modeling
-        self.norm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-        # z info
-        self.z_size = config.z_size
-        self.layer_z_size = config.z_size // config.num_layers
-
-        # gradient checkpointing
-        self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
         self.post_init()
 
 
-    def _get_position_ids(self, x: torch.LongTensor):
-        # simple sequential position ids
-        return torch.arange(x.shape[1], dtype=torch.long, device=x.device)[None]
-
-
-    def _get_mask(self, x: torch.LongTensor):
-        # simple causal mask
-        mask = torch.ones(x.shape[1], x.shape[1], dtype=torch.bool, device=x.device)
-        mask = torch.triu(mask, diagonal=1)
-        return torch.masked_fill(
-            torch.zeros_like(mask).float(),
-            mask,
-            float('-inf')
-        )[None, None]
-
-
     def forward(
         self,
         input_ids,
+        noise=None,
         reparam_scale=None
     ):
         bs, seq_len = input_ids.shape
 
-        """ Easy things """
-        noise = torch.randn(
-            [bs, self.thought_length, self.num_layers, self.layer_z_size],
-            device=input_ids.device, dtype=self.decoder_start.dtype
-        )
-        x_tokens = self.vocab_embs(input_ids)
-
-        """ Encoder """
-
-        # encoder takes noise shifted to the right by one [bs, T, L, zD], removing last
-        encoder_tokens = (
-            self.encoder_embs.expand(bs, -1, -1) +
-            self.encoder_in_proj(
-                torch.cat(
-                    [
-                        torch.zeros_like(noise[:, :1].view(bs, -1, self.z_size)),
-                        noise[:, :-1].view(bs, -1, self.z_size)
-                    ],
-                    dim=1
-                )
+        if noise is None:
+            noise = torch.randn(
+                [bs, self.thought_length, self.num_layers, self.layer_z_size],
+                device=input_ids.device, dtype=self.encoder.thought_embs.dtype
             )
-        ) / np.sqrt(2)
-        encoder_states = torch.cat([x_tokens, encoder_tokens], dim=1)
-        position_ids = self._get_position_ids(encoder_states)
-        mask = self._get_mask(encoder_states)
 
-        # enc vocab = 0 [bs, S], enc compute = 1 [bs, T]
-        encoder_types = torch.cat([torch.zeros_like(x_tokens[:, :, 0]).long(), torch.zeros_like(encoder_tokens[:, :, 0]).long()+1], dim=1)
-        
-        # insert zero noise for the enc vocab tokens
-        enc_noise = torch.cat(
-            [
-                torch.zeros([bs, seq_len, self.num_layers, self.layer_z_size], device=noise.device, dtype=noise.dtype),
-                noise,
-            ],
-            dim=1
-        )
-
-        # run encoder
-        z = []
-        enc_mus = []
-        enc_sigmas = []
-        for idx, layer in enumerate(self.layers):
-
-            if self.gradient_checkpointing:
-                encoder_states, m, s, z_out = self._gradient_checkpointing_func(
-                    self,
-                    layer.__call__,
-                    True,
-                    encoder_states,
-                    encoder_types,
-                    position_ids,
-                    enc_noise[:, :, idx],
-                    None,
-                    mask
-                )
-            else:
-                encoder_states, m, s, z_out = layer(
-                    is_encoder=True,
-                    hidden_states=encoder_states,
-                    state_types=encoder_types,
-                    position_ids=position_ids,
-                    noise=enc_noise[:, :, idx],
-                    z_in=None,
-                    attention_mask=mask
-                )
-
-            # take only the thought vectors
-            z.append(z_out[:, -self.thought_length:])
-            enc_mus.append(m[:, -self.thought_length:])
-            enc_sigmas.append(s[:, -self.thought_length:])
-        
-        # [bs, T, L, zD]
-        z = torch.stack(z, dim=2)
-        enc_mus = torch.stack(enc_mus, dim=2)
-        enc_sigmas = torch.stack(enc_sigmas, dim=2)
-
-        if reparam_scale is not None:
-            z = z * reparam_scale + ((1-reparam_scale) * z).detach()
-            enc_mus = enc_mus * reparam_scale + ((1-reparam_scale) * enc_mus).detach()
-            enc_sigmas = enc_sigmas * reparam_scale + ((1-reparam_scale) * enc_sigmas).detach()
-
-        """ Decoder """
-
-        # decoder takes z shifted to the right by one [bs, T+1, L, zD], keeping last
-        decoder_tokens = (
-            self.decoder_embs.expand(bs, -1, -1) +
-            self.decoder_in_proj(
-                torch.cat(
-                    [
-                        torch.zeros_like(z[:, :1].view(bs, -1, self.z_size)),
-                        z.view(bs, -1, self.z_size)
-                    ],
-                    dim=1
-                )
-            )
-        ) / np.sqrt(2)
-
-        # we add the start token before vocab, and remove last vocab token
-        decoder_states = torch.cat([decoder_tokens, self.decoder_start.expand(bs, -1, -1), x_tokens[:, :-1]], dim=1)
-        position_ids = self._get_position_ids(decoder_states)
-        mask = self._get_mask(decoder_states)
-
-        # dec thought = 2 [bs, T+1], dec out = 3 [bs, T]
-        decoder_types = torch.cat([torch.zeros_like(decoder_tokens[:, :, 0]).long()+2, torch.zeros_like(x_tokens[:, :, 0]).long()+3], dim=1)
-
-        # insert zero z for the dec vocab tokens AND the last thought token (it does not generate)
-        dec_z = torch.cat(
-            [
-                z,
-                torch.zeros([bs, 1+seq_len, self.num_layers, self.layer_z_size], device=z.device, dtype=z.dtype)
-            ],
-            dim=1
-        )
-
-        # run decoder
-        dec_mus = []
-        dec_sigmas = []
-        for idx, layer in enumerate(self.layers):
-
-            if self.gradient_checkpointing:
-                decoder_states, m, s = self._gradient_checkpointing_func(
-                    self,
-                    layer.__call__,
-                    False,
-                    decoder_states,
-                    decoder_types,
-                    position_ids,
-                    None,
-                    dec_z[:, :, idx],
-                    mask
-                )
-            else:
-                decoder_states, m, s = layer(
-                    is_encoder=False,
-                    hidden_states=decoder_states,
-                    state_types=decoder_types,
-                    position_ids=position_ids,
-                    noise=None,
-                    z_in=dec_z[:, :, idx],
-                    attention_mask=mask
-                )
-
-            # take only the thought vectors (last thought token does not generate)
-            dec_mus.append(m[:, :self.thought_length])
-            dec_sigmas.append(s[:, :self.thought_length])
-
-        dec_mus = torch.stack(dec_mus, dim=2)
-        dec_sigmas = torch.stack(dec_sigmas, dim=2)
-
-        """ LM """
-
-        # take only the LM states, starting with the start token
-        lm_states = self.norm(decoder_states[:, self.thought_length+1:])
-        assert lm_states.shape[1] == seq_len
-        
-        lm_logits = self.lm_head(lm_states)
-        lm_logits = F.log_softmax(lm_logits, dim=-1)
-
-        """ Return """
+        # run models
+        z, enc_mus, enc_sigmas = self.encoder(input_ids, noise, reparam_scale=reparam_scale)
+        lm_logits, dec_mus, dec_sigmas = self.decoder(input_ids, z)
 
         return lm_logits, enc_mus, enc_sigmas, dec_mus, dec_sigmas

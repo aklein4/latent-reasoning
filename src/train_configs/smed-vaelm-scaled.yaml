@@ -4,10 +4,10 @@ collator_type: simple
 dataset: fw-45b
 stream_dataset: true
 
-sequence_length: 256
+sequence_length: 128
 
-bs: 2048
-mini_bs: 8
+bs: 4096
+mini_bs: 32
 
 warmup_steps: 500
 lr_steps: 20000
@@ -22,7 +22,7 @@ weight_decay: 0.1
 
 checkpoint_interval: 5000
 
-kl_beta_start: 0.0
-kl_beta_steps: 2000
+kl_clip_start: 10.0
+kl_clip_steps: 5000
 
 reparam_scale: 10.0

@@ -13,6 +13,7 @@ from transformers.activations import ACT2FN
 
 import utils.constants as constants
 
+
 class RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6, affine=True):
         super().__init__()
@@ -230,7 +231,13 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer('cos_emb', cos, persistent=True)
 
 
-    def _get_sin_cos(self, position_ids):
+    def _get_sin_cos(self, x, position_ids):
+        if position_ids is None:
+            return (
+                self.sin_emb[:x.shape[2]][None].detach(),
+                self.cos_emb[:x.shape[2]][None].detach()
+            )
+
         return (
             F.embedding(position_ids, self.sin_emb).detach(),
             F.embedding(position_ids, self.cos_emb).detach()
@@ -248,7 +255,7 @@ class RotaryEmbedding(nn.Module):
         assert q.shape[-1] == self.total_dim, f'q shape {q.shape} does not match total_dim {self.total_dim}'
         assert k.shape[-1] == self.total_dim, f'k shape {k.shape} does not match total_dim {self.total_dim}'
 
-        sin, cos = self._get_sin_cos(position_ids)
+        sin, cos = self._get_sin_cos(q, position_ids)
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
 

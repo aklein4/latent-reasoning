@@ -26,11 +26,18 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = VaeLmModel(VaeLmConfig(**config))
 
-    out, enc_mus, enc_sigmas, dec_mus, dec_sigmas = model(x)
+    noise = torch.randn(x.shape[0], model.config.thought_length, model.config.num_layers, model.config.z_size//model.config.num_layers)
 
-    # print(out)
+    out, enc_mus, enc_sigmas, dec_mus, dec_sigmas = model(x, noise=noise)
+
+    print(out)
     kl = torch.log(dec_sigmas/enc_sigmas) + (enc_sigmas**2 + (enc_mus - dec_mus)**2)/(2*(dec_sigmas**2)) - 0.5
-    print(kl.sum(-1).sum(-1).mean())
+    print(kl.sum(-1).sum(-1))
+
+    # _, enc_new, _, dec_new, _ = model(x, reparam_scale=10, noise=noise)
+
+    # print(torch.max(torch.abs(enc_mus - enc_new)))
+    # print(torch.max(torch.abs(dec_mus - dec_new)))
 
 
 if __name__ == '__main__':

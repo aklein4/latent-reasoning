@@ -23,19 +23,22 @@ class XLAVaeLmTrainer(BaseXLATrainer):
             - 0.5
         ).sum(-1).sum(-1).sum(-1) / x.shape[1]
 
-        # get beta based on the global stap
-        beta = self.kl_beta_start + min(step/self.kl_beta_steps, 1) * (1 - self.kl_beta_start)
+        # clip kl
+        min_kl = max(0, self.kl_clip_start - self.kl_clip_start * (step / self.kl_clip_steps))
+        kl_clipped = torch.clamp(kl, min=min_kl)
 
         results = DotDict(
-            token_loss=loss(logits, x),
+            token_loss=loss(logits, x, shift=False),
             kl=kl.mean(),
-            acc=acc(logits, x),
-            pcorr=pcorr(logits, x),
+            kl_clipped=kl_clipped.mean(),
+            clip_percent=(kl < min_kl).float().mean(),
+            acc=acc(logits, x, shift=False),
+            pcorr=pcorr(logits, x, shift=False),
         )
         results.nelbo = results.token_loss + results.kl
-        results.beta = beta * torch.ones_like(results.kl)
+        results.min_kl = min_kl * torch.ones_like(results.kl)
 
-        results.loss_unscaled = results.token_loss + beta * results.kl
+        results.loss_unscaled = results.token_loss + results.kl_clipped
         results.loss = 2 * results.loss_unscaled / (1 + self.reparam_scale)
 
         return results

@@ -24,5 +24,6 @@ rope_base: 10000
 
 thought_length: 13
 z_size: 44
+z_over_scale: 10
 
-gradient_checkpointing: true
+gradient_checkpointing: false
