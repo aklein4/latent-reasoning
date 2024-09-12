@@ -23,7 +23,7 @@ rope_base: 10000
 
 thought_length: 256
 z_size: 768
-z_over_scale: 2
+z_over_scale: 5
 
 control: false
 

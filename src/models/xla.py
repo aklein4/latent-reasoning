@@ -80,7 +80,7 @@ class XLAModel(PreTrainedModel):
             gradient_checkpointing_func = functools.partial(xla_checkpoint_fn, **gradient_checkpointing_kwargs)
             self._set_gradient_checkpointing(enable=True, gradient_checkpointing_func=gradient_checkpointing_func)
             
-            log_print(f"Gradient checkpointing enabled for {self.__class__.__name__}: {self.gradient_checkpointing}")
+            log_print(f"Gradient checkpointing enabled for {self.__class__.__name__}")
 
 
     def __init__(self, *args, fast_start=False, **kwargs):
