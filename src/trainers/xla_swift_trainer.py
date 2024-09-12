@@ -54,7 +54,7 @@ class XLASwiftTrainer(BaseXLATrainer):
 
     def train_step(self, model, x, mask):
 
-        logits, mu, sigma = model(x, mask)
+        logits, enc_mu, enc_sigma, gen_mu, gen_sigma = model(x, mask)
         
         # log probs, with zero for unmasked tokens
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
@@ -62,7 +62,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
         # kl divergence [bs,]
-        kl = (-torch.log(sigma) + 0.5 * (mu**2 + sigma**2) - 0.5).sum(0).sum(-1).sum(1)
+        kl = (-torch.log(enc_sigma) + 0.5 * (((enc_mu - gen_mu)**2 + enc_sigma**2) - 0.5)).sum(0).sum(-1).sum(1)
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, mask),

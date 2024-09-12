@@ -11,17 +11,18 @@ mlp_size: 256
 
 attention_head_size: 32
 num_attention_heads: 2
-num_registers: 3
+num_registers: 0
 
 num_layers: 4
+num_decoder_layers: 2
 
 hidden_act: silu
-layer_norm_eps: 0.00001
+norm_eps: 0.00001
 
-use_rope: true
 rope_fraction: 2
 rope_base: 10000
 
-z_size: 6
+z_size: 44
+z_over_scale: 10
 
 gradient_checkpointing: false

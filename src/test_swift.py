@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-swift'
+MODEL_CONFIG = 'test-swift'
 
 
 def main():
@@ -22,29 +22,28 @@ def main():
 
     x = tokenizer(["Hello, my dog is cute", "His dog is cute too", "All dogs are cute"], return_tensors="pt", padding="max_length", max_length=16).input_ids
     mask = torch.randint_like(x, 2).bool()
-    mask[:, 0] = True
+    mask[0] = True
+    mask[1] = False
 
     print("loading model...")
     config = load_model_config(MODEL_CONFIG)
-    config['debug'] = True
 
     model = SwiftModel(SwiftConfig(**config))
 
-    print(sum([p.numel() for p in model.parameters()]))
+    logits, mus, sigmas, dec_mus, dec_sigmas = model(x, mask)
 
-    logits, mus, sigmas = model(x, mask)
-    x[:, 0] -= 1
-    other_logits, _, _ = model(x, mask)
-
-    print(torch.max(torch.abs(logits - other_logits)))
-    return
+    print(mus.shape, sigmas.shape, dec_mus.shape, dec_sigmas.shape)
 
     # print(out)
-    print(mus[:, :, 2])
-    print(sigmas[:, :, 2])
+    print("Encoder:")
+    print(mus[:, :, 2, :4])
+    print(sigmas[:, :, 2, :4])
+    print("Decoder:")
+    print(dec_mus[:, :, 2, :4])
+    print(dec_sigmas[:, :, 2, :4])
 
     kl = -torch.log(sigmas) + 0.5 * (mus**2 + sigmas**2) - 0.5
-    print(kl.sum(0).sum(-1))
+    print(kl.sum(-1).sum(-1))
 
 
 if __name__ == '__main__':
