@@ -11,7 +11,7 @@ mlp_size: 2048
 
 attention_head_size: 64
 num_attention_heads: 12
-num_registers: 8
+num_registers: 0
 
 num_layers: 24
 
@@ -21,10 +21,10 @@ layer_norm_eps: 0.00001
 rope_fraction: 1
 rope_base: 10000
 
-thought_length: 128
+thought_length: 256
 z_size: 768
 z_over_scale: 2
 
 control: false
 
-gradient_checkpointing: false
+gradient_checkpointing: true

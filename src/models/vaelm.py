@@ -308,12 +308,23 @@ class VaeLmEncoder(nn.Module):
         mus = []
         sigmas = []
         for ind, layer in enumerate(self.layers):
-            hidden_states, mu, sigma, z_curr = layer(
-                hidden_states,
-                position_ids,
-                noise=padded_noise[:, :, ind],
-                attention_mask=mask
-            )
+            if self.gradient_checkpointing:
+                hidden_states, mu, sigma, z_curr = self._gradient_checkpointing_func(
+                    layer,
+                    hidden_states,
+                    position_ids,
+                    padded_noise[:, :, ind],
+                    None,
+                    mask,
+                    None
+                )
+            else:
+                hidden_states, mu, sigma, z_curr = layer(
+                    hidden_states,
+                    position_ids,
+                    noise=padded_noise[:, :, ind],
+                    attention_mask=mask
+                )
 
             z.append(z_curr[:, -encoder_tokens.shape[1]:])
             mus.append(mu[:, -encoder_tokens.shape[1]:])
@@ -420,12 +431,23 @@ class VaeLmDecoder(nn.Module):
         mus = []
         sigmas = []
         for ind, layer in enumerate(self.layers):
-            hidden_states, mu, sigma = layer(
-                hidden_states,
-                position_ids,
-                z_in=padded_z[:, :, ind],
-                attention_mask=mask
-            )
+            if self.gradient_checkpointing:
+                hidden_states, mu, sigma = self._gradient_checkpointing_func(
+                    layer,
+                    hidden_states,
+                    position_ids,
+                    None,
+                    padded_z[:, :, ind],
+                    mask,
+                    None
+                )
+            else:
+                hidden_states, mu, sigma = layer(
+                    hidden_states,
+                    position_ids,
+                    z_in=padded_z[:, :, ind],
+                    attention_mask=mask
+                )
 
             mus.append(mu[:, :self.thought_length])
             sigmas.append(sigma[:, :self.thought_length])

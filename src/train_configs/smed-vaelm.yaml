@@ -4,9 +4,9 @@ collator_type: simple
 dataset: fw-45b
 stream_dataset: true
 
-sequence_length: 128
+sequence_length: 256
 
-bs: 4096
+bs: 2048
 mini_bs: 32
 
 warmup_steps: 500
