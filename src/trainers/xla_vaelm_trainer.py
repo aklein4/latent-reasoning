@@ -28,23 +28,23 @@ class XLAVaeLmTrainer(BaseXLATrainer):
 
         # clip kl
         kl_clipped = torch.clamp(
-            kl.mean(),
-            min=(nlogp.mean() * self.kl_frac).detach()
+            kl,
+            min=(nlogp * self.kl_frac).detach()
         )
 
         results = DotDict(
             token_loss=loss(logits, x, shift=False, ignore_index=model.pad_token_id),
             kl=kl.sum() / (x != model.pad_token_id).float().sum(),
-            kl_clipped=(kl_clipped*x.shape[0]) / (x != model.pad_token_id).float().sum(),
+            kl_clipped=kl_clipped / (x != model.pad_token_id).float().sum(),
             clip_percent=(kl < (nlogp * self.kl_frac).detach()).float().mean(),
             acc=acc(logits, x, shift=False, ignore_index=model.pad_token_id),
             pcorr=pcorr(logits, x, shift=False, ignore_index=model.pad_token_id),
             nlogp=nlogp.mean(),
             kl_total=kl.mean(),
-            kl_clipped_total=kl_clipped,
+            kl_clipped_total=kl_clipped.mean(),
         )
         results.nelbo = results.token_loss + results.kl
 
-        results.loss = (nlogp.mean() + kl_clipped) / x.shape[1]
+        results.loss = (nlogp.mean() + kl_clipped.mean()) / x.shape[1]
 
         return results
