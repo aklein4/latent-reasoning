@@ -6,6 +6,7 @@ import numpy as np
 
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
+    RMSNorm,
     FusedLinear,
     RotaryAttention,
     GLU
@@ -29,20 +30,16 @@ class SwiftConfig(XLAConfig):
             Number of hidden layers in the Transformer decoder.
         hidden_act (`str` or `function`):
             The non-linear activation function (function or string).
-        layer_norm_eps (`float`):
+        norm_eps (`float`):
             The epsilon used by the normalization layers.
-        use_rope (`bool`):
-            Whether or not to use the RoPE embeddings.
         rope_fraction (`int`):
             The fraction of the hidden size to use for the RoPE embeddings.
         rope_base (`float`):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
-        disable_fiter (`bool`):
-            Whether or not to disable the stream filter.
-        debug (`bool`):
-            Whether or not to run in debug mode, to test if the decoder can see encoder information.
+        z_init_scale (`float`):
+            The scale of the initial latent space.
     """
 
     model_type = 'base'
@@ -56,13 +53,11 @@ class SwiftConfig(XLAConfig):
         num_registers=None,
         num_layers=None,
         hidden_act=None,
-        layer_norm_eps=None,
-        use_rope=None,
+        norm_eps=None,
         rope_fraction=None,
         rope_base=None,
         z_size=None,
-        disable_filter=False,
-        debug=False,
+        z_init_scale=None,
         *args,
         **kwargs,
     ):
@@ -77,61 +72,81 @@ class SwiftConfig(XLAConfig):
         self.num_layers = num_layers
 
         self.hidden_act = hidden_act
-        self.layer_norm_eps = layer_norm_eps
+        self.norm_eps = norm_eps
         
-        self.use_rope = use_rope
         self.rope_fraction = rope_fraction
         self.rope_base = rope_base
 
         self.z_size = z_size
+        self.z_init_scale = z_init_scale
 
-        self.disable_filter = disable_filter
-        self.debug = debug
+        # derived
+        assert self.z_size % self.num_layers == 0
+        self.layer_z_size = self.z_size // self.num_layers
+        self.qkv_size = self.attention_head_size * self.num_attention_heads
 
         super().__init__(*args, **kwargs)
 
 
-class SwiftLayer(nn.Module):
+class BaseSwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
-        if config.debug:
-            return
 
-        self.cross_proj.weight.data.zero_()
-        if self.cross_proj.bias is not None:
-            self.cross_proj.bias.data.zero_()
-        
-        self.cross_proj.special_inited = True
+        self.attn_scale.weight.data.zero_()
+        self.qkv_scale.weight.data.zero_()
+        self.qkv_bias.weight.data.zero_()
+        self.attn_filter.weight.data.zero_()
+
+        self.mlp_scale.weight.data.zero_()
+        self.mlp_bias.weight.data.zero_()
+        self.mlp_filter.weight.data.zero_()
+
+        self.attn_scale.special_inited = True
+        self.qkv_scale.special_inited = True
+        self.qkv_bias.special_inited = True
+        self.attn_filter.special_inited = True
+
+        self.mlp_scale.special_inited = True
+        self.mlp_bias.special_inited = True
+        self.mlp_filter.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
-        self.disable_filter = config.disable_filter
-        self.debug = config.debug
 
         self.hidden_size = config.hidden_size
         self.mlp_size = config.mlp_size
-        self.qkv_size = config.attention_head_size * config.num_attention_heads
-        self.z_size = config.z_size
+        self.qkv_size = config.qkv_size
 
-        self.up = FusedLinear(
+        self.attn_norm = RMSNorm(self.hidden_size, eps=config.norm_eps, affine=False)
+        self.attn_scale = nn.Embedding(3, self.hidden_size)
+        self.qkv_scale = nn.Embedding(3, 3*self.qkv_size)
+        self.qkv_bias = nn.Embedding(3, 3*self.qkv_size)
+        self.attn_filter = nn.Embedding(3, self.hidden_size)
+
+        self.QKV = FusedLinear(
             self.hidden_size,
-            [self.qkv_size]*3 + [self.mlp_size]*2 + [self.z_size]*3,
+            [self.qkv_size]*3,
             bias=False
         )
-        self.down = FusedLinear(
-            [self.qkv_size, self.mlp_size, self.z_size],
-            self.hidden_size,
-            bias=False,
-        )
+        self.O = nn.Linear(self.qkv_size, self.hidden_size, bias=False)
+
+        self.mlp_norm = nn.LayerNorm(self.hidden_size, eps=config.norm_eps, elementwise_affine=False)
+        self.mlp_scale = nn.Embedding(3, self.hidden_size)
+        self.mlp_bias = nn.Embedding(3, self.hidden_size)
+        self.mlp_filter = nn.Embedding(3, self.hidden_size)
+
+        self.mlp_gate = nn.Linear(self.hidden_size, self.mlp_size, bias=False)
+        self.mlp_up = nn.Linear(self.hidden_size, self.mlp_size, bias=False)
+        self.mlp_down = nn.Linear(self.mlp_size, self.hidden_size, bias=False)
 
         self.attn = RotaryAttention(
             self.hidden_size,
             config.attention_head_size,
             config.num_attention_heads,
-            config.num_registers,
-            config.use_rope,
+            None,
+            True,
             config.rope_fraction,
             config.max_sequence_length,
             config.rope_base,
@@ -139,87 +154,92 @@ class SwiftLayer(nn.Module):
         )
         self.mlp = GLU(config.hidden_act)
 
-        self.norm = nn.LayerNorm(self.hidden_size, eps=config.layer_norm_eps, elementwise_affine=False)
-        self.norm_scale = nn.Parameter(torch.zeros(2, 1, 1, self.hidden_size))
-        self.norm_bias = nn.Parameter(torch.zeros(2, 1, 1, self.hidden_size))
-        self.cross_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
 
-        self.z_scale = 1 / np.sqrt(config.num_layers * self.z_size)
+    def forward(
+        self,
+        hidden_states,
+        state_types,
+        position_ids: torch.LongTensor,
+        attention_mask=None,
+        past_key_value=None,
+    ):
 
-        k = torch.linspace(0, 1, self.hidden_size)
-        stream_filter = torch.maximum(
-            torch.exp(-2 * np.log(config.num_layers+1) * k),
-            torch.full_like(k, 1 / (layer_idx + 2))
+        # attention
+        q, k, v = self.QKV(
+            self.attn_norm(hidden_states),
+            in_scale=(1+self.attn_scale(state_types)),
+            scale=(1+self.qkv_scale(state_types)),
+            bias=self.qkv_bias(state_types)
         )
-        stream_filter = stream_filter[None, None, :]
-        self.register_buffer('stream_filter', stream_filter, persistent=True)
+
+        attn_out = self.attn(
+            q, k, v,
+            position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value
+        )
+        y = self.O(attn_out) * self.attn_filter(state_types)
+
+        hidden_states = hidden_states + y
+
+        # mlp
+        x = self.mlp_norm(hidden_states) * (1+self.mlp_scale(state_types)) + self.mlp_bias(state_types)
+        
+        gate = self.mlp_gate(x)
+        up = self.mlp_up(x)
+        
+        mlp_out = self.mlp(gate, up)
+        y = self.mlp_down(mlp_out)
+
+        hidden_states = hidden_states + y
+
+        return hidden_states
+
+
+class EncoderSwiftLayer(BaseSwiftLayer):
+
+
+    def __init__(self, config: SwiftConfig, layer_idx: int):
+        super().__init__()
+
+        self.layer_z_size = config.layer_z_size
+
+        self.z_norm = RMSNorm(self.hidden_size, eps=config.norm_eps, affine=True)
+        self.z_filter = nn.Parameter(torch.zeros(1, 1, self.hidden_size))
+
+        self.z_up = FusedLinear(
+            self.hidden_size,
+            [self.layer_z_size]*2,
+            bias=False
+        )
+        self.z_down = nn.Linear(self.layer_z_size, self.hidden_size, bias=False)
+
+        self.z_scale = np.sqrt(config.z_init_scale / config.num_layers)
 
 
     def forward(
         self,
         hidden_states,
-        z: torch.Tensor,
+        state_types,
+        noise,
         position_ids: torch.LongTensor,
         attention_mask=None,
         past_key_value=None,
     ):
-        bs = hidden_states.shape[0]//2
+        hidden_states = super().forward(
+            hidden_states, state_types, position_ids, attention_mask, past_key_value
+        )
 
-        normed = self.norm(hidden_states.view(2, bs, *hidden_states.shape[-2:]))
-        x = normed * (self.norm_scale + 1) + self.norm_bias
-        x[0] = x[0] + self.cross_proj(normed[1]) # encoder gets info from decoder
-        x = x.view(*hidden_states.shape)
-
-        q, k, v, gate, up, shift, mu, log_sigma = self.up(x)
-
-        shift = shift[bs:] # decoder is second half
-        mu = mu[:bs] * self.z_scale # encoder is first half
-        log_sigma = log_sigma[:bs] * self.z_scale
+        mu, log_sigma = self.z_up(
+            self.z_norm(hidden_states),
+            scale=self.z_scale
+        ).chunk(2, dim=-1)
         sigma = F.softplus(log_sigma + np.log(np.e - 1))
 
-        attn_out = self.attn(
-            q, k, v,
-            position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
-        mlp_out = self.mlp(gate, up)
-        z_out = (shift + mu + sigma * z).repeat(2, 1, 1)
+        z = mu + sigma * noise
+        hidden_states = hidden_states + self.z_down(z) * self.z_filter
 
-        if self.debug:
-            z_out = torch.zeros_like(z_out)
-
-        y = self.down(attn_out, mlp_out, z_out)
-
-        return self.update_stream(hidden_states, y), mu, sigma
-
-
-    def sample(
-        self,
-        hidden_states,
-        z,
-        position_ids,
-        attention_mask=None,
-        past_key_value=None,
-    ):
-        
-        # use only encoder parameters
-        x = self.norm(hidden_states) * self.norm_scale[1] + self.norm_bias[1]
-
-        q, k, v, gate, up, shift, mu, log_sigma = self.up(x)
-
-        attn_out = self.attn(
-            q, k, v,
-            position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
-        mlp_out = self.mlp(gate, up)
-        z_out = shift + z
-
-        y = self.down(attn_out, mlp_out, z_out)
-
-        return self.update_stream(hidden_states, y)
+        return hidden_states, mu, sigma, z
 
 
     def update_stream(self, hidden_states, y):
@@ -281,7 +301,7 @@ class SwiftModel(XLAModel):
         )
 
         # lm modeling
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing

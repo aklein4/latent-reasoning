@@ -24,19 +24,17 @@ class XLAVaeLmTrainer(BaseXLATrainer):
         ).sum(-1).sum(-1).sum(-1) / x.shape[1]
 
         # clip kl
-        min_kl = max(0, self.kl_clip_start - self.kl_clip_start * (step / self.kl_clip_steps))
-        kl_clipped = torch.clamp(kl, min=min_kl)
+        kl_clipped = torch.clamp(kl, min=self.kl_clip)
 
         results = DotDict(
             token_loss=loss(logits, x, shift=False),
             kl=kl.mean(),
             kl_clipped=kl_clipped.mean(),
-            clip_percent=(kl < min_kl).float().mean(),
+            clip_percent=(kl < self.kl_clip).float().mean(),
             acc=acc(logits, x, shift=False),
             pcorr=pcorr(logits, x, shift=False),
         )
         results.nelbo = results.token_loss + results.kl
-        results.min_kl = min_kl * torch.ones_like(results.kl)
 
         results.loss_unscaled = results.token_loss + results.kl_clipped
         results.loss = 2 * results.loss_unscaled / (1 + self.reparam_scale)
