@@ -518,7 +518,7 @@ class VaeLmModel(XLAModel):
         if noise is None:
             noise = torch.randn(
                 [bs, self.thought_length, self.num_layers, self.layer_z_size],
-                device=input_ids.device, dtype=self.encoder.thought_embs.dtype
+                device=input_ids.device, dtype=self.decoder.vocab_start.dtype
             )
 
         # run models
