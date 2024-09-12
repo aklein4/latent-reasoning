@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-vaelm'
+MODEL_CONFIG = 'test-vaelm'
 
 
 def main():
@@ -30,9 +30,8 @@ def main():
 
     out, enc_mus, enc_sigmas, dec_mus, dec_sigmas = model(x, noise=noise)
 
-    print(out)
     kl = torch.log(dec_sigmas/enc_sigmas) + (enc_sigmas**2 + (enc_mus - dec_mus)**2)/(2*(dec_sigmas**2)) - 0.5
-    print(kl.sum(-1).sum(-1).mean(-1))
+    print(kl.sum(-1).sum(-1))
 
     # _, enc_new, _, dec_new, _ = model(x, reparam_scale=10, noise=noise)
 

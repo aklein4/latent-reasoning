@@ -8,8 +8,8 @@ from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
     RMSNorm,
     FusedLinear,
-    RotaryAttention,
-    GLU
+    FullRotaryAttention,
+    FullGLU
 )
 from utils.logging_utils import log_print
 
@@ -49,8 +49,6 @@ class VaeLmConfig(XLAConfig):
             The non-linear activation function (function or string).
         layer_norm_eps (`float`):
             The epsilon used by the normalization layers.
-        use_rope (`bool`):
-            Whether or not to use the RoPE embeddings.
         rope_fraction (`int`):
             The fraction of the hidden size to use for the RoPE embeddings.
         rope_base (`float`):
@@ -61,6 +59,8 @@ class VaeLmConfig(XLAConfig):
             The size of the latent space.
         z_over_scale (`float`):
             The scale of the z values.
+        control (`bool`, *optional*, defaults to False):
+            Whether to use control mode.
     """
 
     model_type = 'base'
@@ -75,12 +75,12 @@ class VaeLmConfig(XLAConfig):
         num_layers=None,
         hidden_act=None,
         layer_norm_eps=None,
-        use_rope=None,
         rope_fraction=None,
         rope_base=None,
         thought_length=None,
         z_size=None,
         z_over_scale=None,
+        control=False,
         *args,
         **kwargs,
     ):
@@ -97,13 +97,17 @@ class VaeLmConfig(XLAConfig):
         self.hidden_act = hidden_act
         self.layer_norm_eps = layer_norm_eps
         
-        self.use_rope = use_rope
         self.rope_fraction = rope_fraction
         self.rope_base = rope_base
 
         self.thought_length = thought_length
         self.z_size = z_size
         self.z_over_scale = z_over_scale
+
+        self.control = control
+
+        assert self.z_size % self.num_layers == 0, "z_size must be divisible by num_layers"
+        self.layer_z_size = self.z_size // self.num_layers
 
         super().__init__(*args, **kwargs)
 
@@ -114,54 +118,60 @@ class VaeLmLayer(nn.Module):
         if self.is_encoder:
             return
 
-        self.up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.hidden_size))
-        self.up.linear.weight.data[-2*self.layer_z_size:].zero_()
-        if self.up.linear.bias is not None:
-            self.up.linear.bias.data.zero_()
-        
-        self.up.linear.special_inited = True
+        self.z_up.linear.weight.data.zero_()
+        if self.z_up.linear.bias is not None:
+            self.z_up.linear.bias.data.zero_()
+
+        self.z_up.linear.special_inited = True
 
 
     def __init__(self, config: VaeLmConfig, layer_idx: int, is_encoder):
         super().__init__()
         self.is_encoder = is_encoder
+        self.control = config.control
 
         # basic shapes
         self.hidden_size = config.hidden_size
-        self.mlp_size = config.mlp_size
-        self.qkv_size = config.attention_head_size * config.num_attention_heads
+        self.layer_z_size = config.layer_z_size
         
-        assert config.z_size % config.num_layers == 0
-        self.layer_z_size = config.z_size // config.num_layers
+        # input norms
+        self.attn_norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=True)
+        self.mlp_norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=True)
+        self.z_norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=True)
 
-        # input norm
-        self.norm = RMSNorm(config.hidden_size, config.layer_norm_eps, affine=True)
-
-        # linear projections
-        self.up = FusedLinear(
-            self.hidden_size,
-            [self.qkv_size]*3 + [self.mlp_size]*2 + [self.layer_z_size]*2,
-            bias=True
-        )
-        self.down = FusedLinear(
-            [self.qkv_size, self.mlp_size, self.layer_z_size],
-            self.hidden_size,
-            bias=False,
-        )
+        # output filters
+        self.attn_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+        self.mlp_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+        self.z_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
 
         # operations
-        self.attn = RotaryAttention(
+        self.attn = FullRotaryAttention(
             self.hidden_size,
             config.attention_head_size,
             config.num_attention_heads,
             config.num_registers,
-            config.use_rope,
+            True,
             config.rope_fraction,
             config.max_sequence_length+config.thought_length+2,
             config.rope_base,
             layer_idx
         )
-        self.mlp = GLU(config.hidden_act)
+        self.mlp = FullGLU(
+            self.hidden_size,
+            config.mlp_size,
+            config.hidden_act,
+        )
+
+        self.z_up = FusedLinear(
+            config.hidden_size,
+            [config.layer_z_size]*2,
+            bias=False
+        )
+        self.z_down = nn.Linear(
+            config.layer_z_size,
+            config.hidden_size,
+            bias=False
+        )
 
         # rescale z for better kl
         self.z_scale = np.sqrt(config.z_over_scale / config.z_size)
@@ -181,30 +191,38 @@ class VaeLmLayer(nn.Module):
         else:
             assert noise is None and z_in is not None
 
-        # get operators, using per-function affine (scales add one for better decay)
-        q, k, v, gate, up, mu, log_sigma = self.up(self.norm(hidden_states))
-
-        # apply operators
+        # attention
         attn_out = self.attn(
-            q, k, v,
+            self.attn_norm(hidden_states),
             position_ids,
             attention_mask=attention_mask,
             past_key_value=past_key_value
         )
-        mlp_out = self.mlp(gate, up)
+        hidden_states = hidden_states + self.attn_filter * attn_out
 
-        # fix latent params
+        # mlp
+        mlp_out = self.mlp(self.mlp_norm(hidden_states))
+        hidden_states = hidden_states + self.mlp_filter * mlp_out
+
+        # z
+        mu, log_sigma = self.z_up(self.z_norm(hidden_states))
         mu = mu * self.z_scale
         sigma = F.softplus(log_sigma * self.z_scale + np.log(np.e - 1))
-        
+        if self.control:
+            mu = torch.zeros_like(mu)
+            sigma = torch.ones_like(sigma)
+
         # if encoder, apply reparametrization for z, otherwise use z_in
         if self.is_encoder:
             z = mu + sigma * noise
         else:
             z = z_in
+        if self.control:
+            z = torch.zeros_like(z)
 
         # apply down operator (out scale is reszero)
-        hidden_states = hidden_states + self.down(attn_out, mlp_out, z)
+        z_out = self.z_down(z)
+        hidden_states = hidden_states + self.z_filter * z_out
 
         # only return z_out if encoder
         if self.is_encoder:
@@ -447,6 +465,7 @@ class VaeLmModel(XLAModel):
 
     def __init__(self, config: VaeLmConfig, fast_start=False):
         super().__init__(config, fast_start=fast_start)
+        self.control = config.control
 
         # info
         self.vocab_size = config.vocab_size
@@ -457,11 +476,11 @@ class VaeLmModel(XLAModel):
         self.num_layers = config.num_layers
 
         # models
-        self.encoder = VaeLmEncoder(config)
+        if not self.control:
+            self.encoder = VaeLmEncoder(config)
         self.decoder = VaeLmDecoder(config)
 
-        # positional embeddings
-        assert config.use_rope is not None and config.use_rope, "RoPE embeddings are required for VaeLm!"
+        self.pad_token_id = config.pad_token_id
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -471,7 +490,6 @@ class VaeLmModel(XLAModel):
         self,
         input_ids,
         noise=None,
-        reparam_scale=None
     ):
         bs, seq_len = input_ids.shape
 
@@ -482,7 +500,13 @@ class VaeLmModel(XLAModel):
             )
 
         # run models
-        z, enc_mus, enc_sigmas = self.encoder(input_ids, noise, reparam_scale=reparam_scale)
+        if self.control:
+            z = torch.zeros_like(noise)
+            enc_mus = torch.zeros_like(noise)
+            enc_sigmas = torch.ones_like(noise)
+        else:
+            z, enc_mus, enc_sigmas = self.encoder(input_ids, noise)
+        
         lm_logits, dec_mus, dec_sigmas = self.decoder(input_ids, z)
 
         return lm_logits, enc_mus, enc_sigmas, dec_mus, dec_sigmas

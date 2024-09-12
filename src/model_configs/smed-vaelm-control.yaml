@@ -25,6 +25,6 @@ thought_length: 128
 z_size: 768
 z_over_scale: 2
 
-control: false
+control: true
 
 gradient_checkpointing: false

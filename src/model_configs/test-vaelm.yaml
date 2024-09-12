@@ -18,12 +18,13 @@ num_layers: 4
 hidden_act: silu
 layer_norm_eps: 0.00001
 
-use_rope: true
 rope_fraction: 2
 rope_base: 10000
 
 thought_length: 13
 z_size: 44
 z_over_scale: 10
+
+control: false
 
 gradient_checkpointing: false

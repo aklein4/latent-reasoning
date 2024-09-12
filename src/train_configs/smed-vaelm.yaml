@@ -22,6 +22,4 @@ weight_decay: 0.1
 
 checkpoint_interval: 5000
 
-kl_clip: 2.0
-
-reparam_scale: 1.0
+kl_frac: 0.25

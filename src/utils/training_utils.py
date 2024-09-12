@@ -5,6 +5,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def log_prob(
+    logits: torch.Tensor,
+    x: torch.LongTensor,
+    ignore_index: Optional[int]=-1,
+    extra_mask=None,
+    shift=True
+) -> torch.Tensor:
+    """ Standard cross-entropy loss for language modeling.
+     - applies offset so that logits_{t} predicts x_{t+1}
+     - ignores padding tokens and last logits
+     
+    Args:
+        logits (torch.Tensor): token logits from model [B, T, V]
+        x (torch.LongTensor): target tokens [B, T]
+        ignore_index (Optional[int], optional): Paddding token to ignore. Defaults to -1.
+
+    Returns:
+        torch.Tensor: cross-entropy loss [nats]
+    """
+    if shift:
+        x = x[:, 1:]
+        og_shape = x.shape
+
+        x = x.view(-1)
+        logits = logits[:, :-1].view(-1, logits.shape[-1])
+    else:
+        og_shape = x.shape
+        x = x.view(-1)
+        logits = logits.view(-1, logits.shape[-1])
+    
+    mask = x != ignore_index
+    if extra_mask is not None:
+        mask = mask & extra_mask.view(-1)
+
+    # we assume logits are normalized, to save (quite a bit of) memory
+    ar = torch.arange(x.shape[0], device=x.device, dtype=x.dtype)
+    loss = -logits[ar, x]
+
+    # mask padding tokens
+    loss = torch.masked_fill(loss, ~mask, 0.0)
+    loss = loss.view(*og_shape)
+    return loss.sum(-1)
+
+
 def loss(
     logits: torch.Tensor,
     x: torch.LongTensor,

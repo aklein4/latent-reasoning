@@ -101,6 +101,59 @@ class FusedLinear(nn.Module):
         return out
 
 
+class FullRotaryAttention(nn.Module):
+
+    def __init__(
+        self,
+        hidden_size,
+        attention_head_size,
+        num_attention_heads,
+        num_registers,
+        use_rope,
+        rope_fraction,
+        max_sequence_length,
+        rope_base,
+        layer_idx
+    ):
+        super().__init__()
+
+        qkv_size = attention_head_size * num_attention_heads
+        
+        self.Q = nn.Linear(hidden_size, qkv_size, bias=True)
+        self.K = nn.Linear(hidden_size, qkv_size, bias=True)
+        self.V = nn.Linear(hidden_size, qkv_size, bias=True)
+
+        self.O = nn.Linear(qkv_size, hidden_size, bias=False)
+
+        self.attn = RotaryAttention(
+            hidden_size,
+            attention_head_size,
+            num_attention_heads,
+            num_registers,
+            use_rope,
+            rope_fraction,
+            max_sequence_length,
+            rope_base,
+            layer_idx
+        )
+
+    
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask=None,
+        past_key_value=None,
+    ):
+        q = self.Q(hidden_states)
+        k = self.K(hidden_states)
+        v = self.V(hidden_states)
+
+        attn_output = self.attn(q, k, v, position_ids, attention_mask, past_key_value)
+
+        return self.O(attn_output)
+
+
 class RotaryAttention(nn.Module):
 
     def __init__(
@@ -276,6 +329,25 @@ class RotaryEmbedding(nn.Module):
         return q, k
 
 
+class FullGLU(nn.Module):
+
+    def __init__(self, hidden_size, mlp_size, activation):
+        super().__init__()
+
+        self.gate_proj = nn.Linear(hidden_size, mlp_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, mlp_size, bias=False)
+        self.down_proj = nn.Linear(mlp_size, hidden_size, bias=False)
+
+        self.glu = GLU(activation)
+
+
+    def forward(self, x):
+        gate = self.gate_proj(x)
+        up = self.up_proj(x)
+
+        return self.down_proj(self.glu(gate, up))
+
+
 class GLU(nn.Module):
 
     def __init__(self, activation):
@@ -285,142 +357,3 @@ class GLU(nn.Module):
 
     def forward(self, gate, value):
         return self.activation(gate) * value
-
-
-from typing import Iterable
-from torch.utils.checkpoint import (
-    detach_variable,
-    check_backward_validity,
-)
-
-
-def _extract_tensors_from_list(inputs):
-    tensor_inputs = []
-
-    if torch.is_tensor(inputs):
-        tensor_inputs.append(inputs)
-
-    # tensor is Iterable so we need to avoid iterating through tensor
-    elif isinstance(inputs, Iterable):
-        for input in inputs:
-            tensor_inputs += _extract_tensors_from_list(input)
-
-    return tensor_inputs
-
-
-class _ModelCheckpointFunction(torch.autograd.Function):
-
-
-  @staticmethod
-  def forward(ctx, model, run_function, *args):
-    ctx.model = model
-    
-    check_backward_validity(args)
-    ctx.run_function = run_function
-
-    # Accommodates the (remote) possibility that autocast is enabled for cpu AND gpu.
-    ctx.gpu_autocast_kwargs = {
-        "enabled": torch.is_autocast_enabled(),
-        "dtype": torch.get_autocast_gpu_dtype(),
-        "cache_enabled": torch.is_autocast_cache_enabled()
-    }
-    ctx.cpu_autocast_kwargs = {
-        "enabled": torch.is_autocast_cpu_enabled(),
-        "dtype": torch.get_autocast_cpu_dtype(),
-        "cache_enabled": torch.is_autocast_cache_enabled()
-    }
-
-    # Save non-tensor inputs in ctx, keep a placeholder None for tensors
-    # to be filled out during the backward.
-    ctx.inputs = []
-    ctx.tensor_indices = []
-    tensor_inputs = []
-    for i, arg in enumerate(args):
-      
-      if torch.is_tensor(arg):
-        tensor_inputs.append(arg)
-        ctx.tensor_indices.append(i)
-        ctx.inputs.append(None)
-
-      else:
-        ctx.inputs.append(arg)
-
-    ctx.save_for_backward(*tensor_inputs)
-
-    with torch.no_grad():
-      outputs = run_function(*args)
-
-    return outputs
-
-
-  @staticmethod
-  def backward(ctx, *args):
-    if not torch.autograd._is_checkpoint_valid():
-        raise RuntimeError(
-            "Checkpointing is not compatible with .grad() or when an `inputs` parameter"
-            " is passed to .backward(). Please use .backward() and do not pass its `inputs`"
-            " argument."
-        )
-    
-    # Copy the list to avoid modifying original list.
-    inputs = list(ctx.inputs)
-    tensor_indices = ctx.tensor_indices
-    tensors = ctx.saved_tensors
-
-    # Fill in inputs with appropriate saved tensors.
-    for i, idx in enumerate(tensor_indices):
-      inputs[idx] = tensors[i]
-
-    # It may be more efficient to call a single optimization barrier after
-    # the model forward pass, rather than after the original layers.
-    # optimization_barrier_ is needed to separate the original forward pass with
-    # the next forward + backward pass.
-    weights = list(ctx.model.parameters())
-    buffers = list(ctx.model.buffers())
-    if constants.XLA_AVAILABLE:
-        xm.optimization_barrier_(
-            _extract_tensors_from_list(
-                inputs + list(args) +
-                weights + buffers
-            )
-        )
-
-    detached_inputs = detach_variable(tuple(inputs))
-    with torch.enable_grad(), \
-        torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs), \
-        torch.cpu.amp.autocast(**ctx.cpu_autocast_kwargs):
-            outputs = ctx.run_function(*detached_inputs)
-
-    if isinstance(outputs, torch.Tensor):
-      outputs = (outputs,)
-
-    # run backward() with only tensor that requires grad
-    outputs_with_grad = []
-    args_with_grad = []
-    for i in range(len(outputs)):
-      
-      if torch.is_tensor(outputs[i]) and outputs[i].requires_grad:
-        outputs_with_grad.append(outputs[i])
-        args_with_grad.append(args[i])
-
-    if len(outputs_with_grad) == 0:
-      raise RuntimeError(
-         "none of output has requires_grad=True, this checkpoint() is not necessary"
-        )
-    
-    torch.autograd.backward(outputs_with_grad, args_with_grad)
-    grads = tuple(
-        inp.grad if isinstance(inp, torch.Tensor) else None
-        for inp in detached_inputs
-    )
-
-    return (None,None) + grads
-
-
-def model_checkpoint(model, function, *args):
-    """ This is an optimized version of the xla gradient checkpointing function.
-     - removes per-section optimization barriers
-        (requires a single optimization barrier after the model forward pass!)
-     - removes rng management (not needed for this project)
-    """
-    return _ModelCheckpointFunction.apply(model, function, *args)
