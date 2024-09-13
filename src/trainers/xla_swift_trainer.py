@@ -52,7 +52,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         return kl.sum() / (mask & (x != pad)).float().sum()
 
 
-    def train_step(self, model, x, mask):
+    def train_step(self, step, model, x, mask):
 
         logits, enc_mu, enc_sigma, gen_mu, gen_sigma = model(x, mask)
         
