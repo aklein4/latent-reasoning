@@ -54,7 +54,7 @@ class XLASwiftTrainer(BaseXLATrainer):
 
     def compute_kl(self, enc_mu, enc_sigma, gen_mu):
         return (
-            -torch.log(enc_sigma[self.uncon])
+            -torch.log(enc_sigma)
             + 0.5 * (((enc_mu - gen_mu)**2 + enc_sigma**2)
             - 0.5)
         ).sum(-1).sum(-1).sum(1)
