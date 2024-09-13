@@ -17,7 +17,7 @@ num_layers: 24
 num_decoder_layers: 6
 
 hidden_act: silu
-layer_norm_eps: 0.00001
+norm_eps: 0.00001
 
 rope_fraction: 1
 rope_base: 10000
