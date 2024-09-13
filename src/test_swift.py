@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-swift'
+MODEL_CONFIG = 'smed-swift'
 
 
 def main():
@@ -30,7 +30,7 @@ def main():
 
     model = SwiftModel(SwiftConfig(**config))
 
-    logits, mus, sigmas, dec_mus, dec_sigmas = model(x, mask)
+    logits, mus, sigmas, dec_mus, dec_sigmas = model(x, mask, torch.zeros_like(mask[:, 0]))
 
     print(mus.shape, sigmas.shape, dec_mus.shape, dec_sigmas.shape)
 
