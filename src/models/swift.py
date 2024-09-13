@@ -315,7 +315,7 @@ class SwiftGenerator(nn.Module):
         self.layers_z_size = config.layer_z_size
 
         # vocab inputs
-        self.vocab_embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+        self.vocab_embs = nn.Embedding(2+config.vocab_size, config.hidden_size)
         self.prompt_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
 
         # layers
@@ -331,12 +331,18 @@ class SwiftGenerator(nn.Module):
         input_ids,
         mask,
         z,
+        uncond_mask
     ):
 
         hidden_states = torch.where(
             mask.unsqueeze(-1),
+            self.vocab_embs(torch.ones_like(input_ids)),
+            (self.vocab_embs(input_ids+2) + self.prompt_switch) / np.sqrt(2)
+        )
+        hidden_states = torch.where(
+            uncond_mask.unsqueeze(-1).unsqueeze(-1) & ~mask.unsqueeze(-1),
             self.vocab_embs(torch.zeros_like(input_ids)),
-            (self.vocab_embs(input_ids+1) + self.prompt_switch) / np.sqrt(2)
+            hidden_states
         )
 
         # insert zero z for the vocab tokens, and a zero for the first thought
@@ -465,7 +471,8 @@ class SwiftModel(XLAModel):
     def forward(
         self,
         input_ids,
-        mask
+        mask,
+        uncond_mask
     ):
         bs, seq_len = input_ids.shape
 
@@ -475,7 +482,7 @@ class SwiftModel(XLAModel):
         )
 
         z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
-        gen_mu, gen_sigma = self.generator(input_ids, mask, z)
+        gen_mu, gen_sigma = self.generator(input_ids, mask, z, uncond_mask)
         lm_logits = self.decoder(z)
 
         return lm_logits, enc_mu, enc_sigma, gen_mu, gen_sigma
