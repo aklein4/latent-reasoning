@@ -197,12 +197,12 @@ class SwiftLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-        # encoder_states = self.enc_base(
-        #     encoder_states,
-        #     position_ids=position_ids,
-        #     attention_mask=attention_mask,
-        #     past_key_value=past_key_value,
-        # )
+        encoder_states = self.enc_base(
+            encoder_states,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+        )
         decoder_states = self.dec_base(
             decoder_states,
             position_ids=position_ids,
@@ -325,7 +325,7 @@ class SwiftModel(XLAModel):
 
             kl = kl + kl_out
 
-        lm_logits = self.lm_head(self.norm(decoder_states))
+        lm_logits = self.lm_head(self.norm(encoder_states+decoder_states))
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, kl
