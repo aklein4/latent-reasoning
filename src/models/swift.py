@@ -324,5 +324,6 @@ class SwiftModel(XLAModel):
             kl = kl + kl_out
 
         lm_logits = self.lm_head(self.norm(decoder_states))
+        lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, kl
