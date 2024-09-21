@@ -197,21 +197,20 @@ class SwiftLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-        encoder_states = self.enc_base(
-            encoder_states,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value,
-        )
-
-        return encoder_states, decoder_states, torch.zeros_like(encoder_states)[:, 0, 0]
-
+        # encoder_states = self.enc_base(
+        #     encoder_states,
+        #     position_ids=position_ids,
+        #     attention_mask=attention_mask,
+        #     past_key_value=past_key_value,
+        # )
         decoder_states = self.dec_base(
             decoder_states,
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key_value=past_key_value,
         )
+
+        return encoder_states, decoder_states, torch.zeros_like(encoder_states)[:, 0, 0]
 
         enc_mu, enc_log_sigma = self.enc_up(self.enc_norm(encoder_states))
         dec_mu, dec_log_sigma = self.dec_up(self.dec_norm(decoder_states))
