@@ -14,7 +14,6 @@ num_attention_heads: 2
 num_registers: 0
 
 num_layers: 4
-num_decoder_layers: 2
 
 hidden_act: silu
 norm_eps: 0.00001

@@ -22,28 +22,14 @@ def main():
 
     x = tokenizer(["Hello, my dog is cute", "His dog is cute too", "All dogs are cute"], return_tensors="pt", padding="max_length", max_length=16).input_ids
     mask = torch.randint_like(x, 2).bool()
-    mask[0] = True
-    mask[1] = False
 
     print("loading model...")
     config = load_model_config(MODEL_CONFIG)
-
     model = SwiftModel(SwiftConfig(**config))
 
-    logits, mus, sigmas, dec_mus, dec_sigmas = model(x, mask, torch.zeros_like(mask[:, 0]))
+    logits, kl = model(x, mask)
 
-    print(mus.shape, sigmas.shape, dec_mus.shape, dec_sigmas.shape)
-
-    # print(out)
-    print("Encoder:")
-    print(mus[:, :, 2, :4])
-    print(sigmas[:, :, 2, :4])
-    print("Decoder:")
-    print(dec_mus[:, :, 2, :4])
-    print(dec_sigmas[:, :, 2, :4])
-
-    kl = -torch.log(sigmas) + 0.5 * (mus**2 + sigmas**2) - 0.5
-    print(kl.sum(-1).sum(-1))
+    print(kl / mask.float().sum(-1))
 
 
 if __name__ == '__main__':

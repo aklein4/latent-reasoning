@@ -44,7 +44,7 @@ class SwiftConfig(XLAConfig):
             The scale of the initial latent space.
     """
 
-    model_type = 'base'
+    model_type = 'swift'
 
     def __init__(
         self,
@@ -84,44 +84,24 @@ class SwiftConfig(XLAConfig):
         self.z_size = z_size
         self.z_over_scale = z_over_scale
 
-        # derived
-        assert self.z_size % self.num_layers == 0
-        self.layer_z_size = self.z_size // self.num_layers
-
         super().__init__(*args, **kwargs)
 
 
-class SwiftLayer(nn.Module):
+class SwiftBaseLayer(nn.Module):
 
-    def special_init(self, config: SwiftConfig):
-        if self.mode != 'generator':
-            return
-
-        self.z_up.linear.weight.data.zero_()
-        if self.z_up.linear.bias is not None:
-            self.z_up.linear.bias.data.zero_()
-
-        self.z_up.linear.special_inited = True
-
-
-    def __init__(self, config: SwiftConfig, layer_idx: int, mode):
+    def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
-        self.mode = mode
-        assert mode in ["encoder", "generator", "decoder"]
 
         # basic shapes
         self.hidden_size = config.hidden_size
-        self.layer_z_size = config.layer_z_size
         
         # input norms
         self.attn_norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
         self.mlp_norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
-        self.z_norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
 
         # output filters
         self.attn_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
         self.mlp_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
-        self.z_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
 
         # operations
         self.attn = FullRotaryAttention(
@@ -141,37 +121,14 @@ class SwiftLayer(nn.Module):
             config.hidden_act,
         )
 
-        self.z_up = FusedLinear(
-            config.hidden_size,
-            [config.layer_z_size]*2,
-            bias=False
-        )
-        self.z_down = nn.Linear(
-            config.layer_z_size,
-            config.hidden_size,
-            bias=False
-        )
-
-        # rescale z for better kl
-        self.z_scale = np.sqrt(config.z_over_scale / config.z_size)
-
 
     def forward(
         self,
         hidden_states,
-        mask,
-        noise=None,
-        z_in=None,
         position_ids=None,
         attention_mask=None,
         past_key_value=None,
     ):
-        if self.mode == "encoder":
-            assert z_in is None and noise is not None
-        elif self.mode == "generator":
-            assert noise is None and z_in is not None
-        else:
-            assert noise is None and z_in is None
 
         # attention
         attn_out = self.attn(
@@ -186,251 +143,98 @@ class SwiftLayer(nn.Module):
         mlp_out = self.mlp(self.mlp_norm(hidden_states))
         hidden_states = hidden_states + self.mlp_filter * mlp_out
 
-        if self.mode == 'decoder':
-            return hidden_states
-
-        # z
-        mu, log_sigma = self.z_up(self.z_norm(hidden_states))
-        mu = mu * self.z_scale
-        sigma = F.softplus(log_sigma * self.z_scale + np.log(np.e - 1))
-        if self.mode == 'generator':
-            sigma = torch.ones_like(sigma)
-
-        # apply mask
-        mu = torch.where(
-            mask.unsqueeze(-1),
-            mu,
-            torch.zeros_like(mu)
-        )
-        sigma = torch.where(
-            mask.unsqueeze(-1),
-            sigma,
-            torch.ones_like(sigma)
-        )
-
-        # if encoder, apply reparametrization for z, otherwise use z_in
-        if self.mode == 'encoder':
-            z = mu + sigma * noise
-        else:
-            z = z_in
-
-        # apply down operator (out scale is reszero)
-        z_out = self.z_down(z)
-        hidden_states = hidden_states + self.z_filter * z_out
-
-        # only return z_out if encoder
-        if self.mode == 'encoder':
-            return hidden_states, mu, sigma, z
-
-        return hidden_states, mu, sigma
-
-
-class SwiftEncoder(nn.Module):
-
-    def __init__(self, config: SwiftConfig):
-        super().__init__()
-
-        # basic shapes
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-        self.layer_z_size = config.layer_z_size
-
-        # vocab inputs
-        self.vocab_embs = nn.Embedding(config.vocab_size, config.hidden_size)
-
-        # switches
-        self.vocab_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
-        self.x_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
-
-        # layers
-        self.layers = nn.ModuleList(
-            [SwiftLayer(config, layer_idx, "encoder") for layer_idx in range(config.num_layers)]
-        )
-
-        self.gradient_checkpointing = False
-
-
-    def forward(
-        self,
-        input_ids,
-        mask,
-        noise,
-    ):
-
-        # basic vocab tokens
-        vocab_tokens = (self.vocab_embs(input_ids))
-
-        hidden_states = torch.where(
-            mask.unsqueeze(-1),
-            vocab_tokens + self.x_switch,
-            vocab_tokens + self.vocab_switch,
-        ) / np.sqrt(2)
-
-        # insert zero noise for the enc vocab tokens
-        padded_noise = torch.where(
-            mask.unsqueeze(-1).unsqueeze(-1),
-            noise,
-            torch.zeros_like(noise)
-        )
-
-        # run layers
-        z = []
-        mus = []
-        sigmas = []
-        for ind, layer in enumerate(self.layers):
-            if self.gradient_checkpointing:
-                hidden_states, mu, sigma, z_curr = self._gradient_checkpointing_func(
-                    layer,
-                    hidden_states,
-                    mask,
-                    padded_noise[:, :, ind]
-                )
-            else:
-                hidden_states, mu, sigma, z_curr = layer(
-                    hidden_states,
-                    mask,
-                    padded_noise[:, :, ind]
-                )
-
-            z.append(z_curr)
-            mus.append(mu)
-            sigmas.append(sigma)
-
-        # [bs, T, L, zD]
-        z = torch.stack(z, dim=2)
-        mus = torch.stack(mus, dim=2)
-        sigmas = torch.stack(sigmas, dim=2)
-
-        return z, mus, sigmas
-
-
-class SwiftGenerator(nn.Module):
-
-    def __init__(self, config: SwiftConfig):
-        super().__init__()
-
-        # basic shapes
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-        self.layers_z_size = config.layer_z_size
-
-        # vocab inputs
-        self.vocab_embs = nn.Embedding(2+config.vocab_size, config.hidden_size)
-        self.prompt_switch = nn.Parameter(torch.randn([1, 1, config.hidden_size]))
-
-        # layers
-        self.layers = nn.ModuleList(
-            [SwiftLayer(config, layer_idx, "generator") for layer_idx in range(config.num_layers)]
-        )
-
-        self.gradient_checkpointing = False
-
-
-    def forward(
-        self,
-        input_ids,
-        mask,
-        z,
-        uncond_mask
-    ):
-
-        hidden_states = torch.where(
-            mask.unsqueeze(-1),
-            self.vocab_embs(torch.ones_like(input_ids)),
-            (self.vocab_embs(input_ids+2) + self.prompt_switch) / np.sqrt(2)
-        )
-        hidden_states = torch.where(
-            uncond_mask.unsqueeze(-1).unsqueeze(-1) & ~mask.unsqueeze(-1),
-            self.vocab_embs(torch.zeros_like(input_ids)),
-            hidden_states
-        )
-
-        # insert zero z for the vocab tokens, and a zero for the first thought
-        padded_z = torch.where(
-            mask.unsqueeze(-1).unsqueeze(-1),
-            z,
-            torch.zeros_like(z)
-        )
-
-        # run layers
-        mus = []
-        sigmas = []
-        for ind, layer in enumerate(self.layers):
-            if self.gradient_checkpointing:
-                hidden_states, mu, sigma = self._gradient_checkpointing_func(
-                    layer,
-                    hidden_states,
-                    mask,
-                    None,
-                    padded_z[:, :, ind],
-                )
-            else:
-                hidden_states, mu, sigma = layer(
-                    hidden_states,
-                    mask,
-                    None,
-                    padded_z[:, :, ind],
-                )
-
-            mus.append(mu)
-            sigmas.append(sigma)
-
-        mus = torch.stack(mus, dim=2)
-        sigmas = torch.stack(sigmas, dim=2)
-
-        # take only the LM states, starting with the start token
-        return mus, sigmas
-
-
-class SwiftDecoder(nn.Module):
-
-    def __init__(self, config: SwiftConfig):
-        super().__init__()
-
-        # basic shapes
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-
-        # vocab inputs
-        self.proj_in = nn.Linear(config.z_size, config.hidden_size, bias=False)
-
-        # layers
-        self.layers = nn.ModuleList(
-            [SwiftLayer(config, layer_idx, "decoder") for layer_idx in range(config.num_decoder_layers)]
-        )
-
-        # lm modeling
-        self.norm = RMSNorm(config.hidden_size, eps=config.norm_eps, affine=True)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-        self.gradient_checkpointing = False
+        return hidden_states
     
 
+class SwiftLayer(nn.Module):
+
+    def __init__(self, config: SwiftConfig, layer_idx: int):
+        super().__init__()
+
+        # basic shapes
+        self.hidden_size = config.hidden_size
+        self.z_size = config.z_size
+
+        # base layers
+        self.enc_base = SwiftBaseLayer(config, layer_idx)
+        self.dec_base = SwiftBaseLayer(config, layer_idx)
+
+        # norms
+        self.enc_norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
+        self.dec_norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
+
+        # input projections
+        self.enc_up = FusedLinear(
+            config.hidden_size,
+            [config.z_size, config.z_size],
+            bias=False
+        )
+        self.dec_up = FusedLinear(
+            config.hidden_size,
+            [config.z_size, config.z_size],
+            bias=False
+        )
+
+        # output projections
+        self.enc_down = nn.Linear(config.z_size, config.hidden_size, bias=False)
+        self.dec_down = nn.Linear(config.z_size, config.hidden_size, bias=False)
+
+        # output filters
+        self.enc_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+        self.dec_filter = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+
+        # z scale
+        self.z_scale = np.sqrt(config.z_over_scale / (config.z_size * config.num_layers))
+
+
     def forward(
         self,
-        z
+        encoder_states,
+        decoder_states,
+        mask,
+        noise,
+        position_ids=None,
+        attention_mask=None,
+        past_key_value=None,
     ):
+        encoder_states = self.enc_base(
+            encoder_states,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+        )
+        decoder_states = self.dec_base(
+            decoder_states,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+        )
+
+        enc_mu, enc_log_sigma = self.enc_up(self.enc_norm(encoder_states))
+        dec_mu, dec_log_sigma = self.dec_up(self.dec_norm(decoder_states))
+
+        enc_mu = enc_mu * self.z_scale * mask.unsqueeze(-1)
+        enc_log_sigma = enc_log_sigma * self.z_scale * mask.unsqueeze(-1)
+
+        dec_mu = dec_mu * self.z_scale * mask.unsqueeze(-1)
+        dec_log_sigma = dec_log_sigma * self.z_scale * mask.unsqueeze(-1)
+
+        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
+        dec_sigma = F.softplus(dec_log_sigma + np.log(np.e - 1))
+
+        z = (enc_mu + enc_sigma * noise) * mask.unsqueeze(-1)
+
+        encoder_states = encoder_states + self.enc_filter * self.enc_down(z)
+        decoder_states = decoder_states + self.dec_filter * self.dec_down(z)
+
+        kl = (
+            torch.log(dec_sigma) - torch.log(enc_sigma)
+            + (enc_sigma**2 + (enc_mu - dec_mu)**2) / (2 * (dec_sigma**2))
+            - 0.5
+        ).sum(-1).sum(-1)
+
+        return encoder_states, decoder_states, kl
         
-        hidden_states = self.proj_in(z.view(z.shape[0], -1, self.z_size))
-
-        for layer in self.layers:
-            if self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(
-                    layer,
-                    hidden_states,
-                    None
-                )
-            else:
-                hidden_states = layer(
-                    hidden_states,
-                    None
-                )
-        
-        lm_logits = self.lm_head(self.norm(hidden_states))
-        lm_logits = F.log_softmax(lm_logits, dim=-1)
-
-        return lm_logits
-
 
 class SwiftModel(XLAModel):
 
@@ -457,12 +261,26 @@ class SwiftModel(XLAModel):
     def __init__(self, config: SwiftConfig, fast_start=False):
         super().__init__(config, fast_start=fast_start)
 
+        self.hidden_size = config.hidden_size
+        self.z_size = config.z_size
         self.num_layers = config.num_layers
-        self.layer_z_size = config.layer_z_size
 
-        self.encoder = SwiftEncoder(config)
-        self.generator = SwiftGenerator(config)
-        self.decoder = SwiftDecoder(config)
+        self.vocab_embs = nn.Embedding(config.vocab_size+1, config.hidden_size)
+
+        # switches
+        self.enc_x_switch = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+        self.enc_y_switch = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+        self.dec_x_switch = nn.Parameter(torch.zeros([1, 1, config.hidden_size]))
+
+        # layers
+        self.layers = nn.ModuleList([
+            SwiftLayer(config, i)
+            for i in range(config.num_layers)
+        ])
+
+        # outputs
+        self.norm = RMSNorm(config.hidden_size, config.norm_eps, affine=True)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -471,18 +289,40 @@ class SwiftModel(XLAModel):
     def forward(
         self,
         input_ids,
-        mask,
-        uncond_mask
+        mask
     ):
         bs, seq_len = input_ids.shape
 
         noise = torch.randn(
-            [bs, seq_len, self.config.num_layers, self.config.layer_z_size],
-            device=input_ids.device, dtype=self.encoder.vocab_switch.dtype
+            [bs, seq_len, self.num_layers, self.z_size],
+            device=input_ids.device, dtype=self.enc_x_switch.dtype
+        )
+        base_states = self.vocab_embs(input_ids + 1)
+        float_mask = mask.float()
+
+        encoder_states = torch.where(
+            mask.unsqueeze(-1),
+            base_states + self.enc_y_switch,
+            base_states + self.enc_x_switch,
+        )
+        decoder_states = torch.where(
+            mask.unsqueeze(-1),
+            self.vocab_embs(torch.zeros_like(input_ids)),
+            base_states + self.dec_x_switch
         )
 
-        z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
-        gen_mu, gen_sigma = self.generator(input_ids, mask, z, uncond_mask)
-        lm_logits = self.decoder(z)
+        kl = 0
+        for i, layer in enumerate(self.layers):
 
-        return lm_logits, enc_mu, enc_sigma, gen_mu, gen_sigma
+            encoder_states, decoder_states, kl_out = layer(
+                encoder_states,
+                decoder_states,
+                float_mask,
+                noise[:, :, i],
+            )
+
+            kl = kl + kl_out
+
+        lm_logits = self.lm_head(self.norm(decoder_states))
+
+        return lm_logits, kl
