@@ -203,6 +203,9 @@ class SwiftLayer(nn.Module):
             attention_mask=attention_mask,
             past_key_value=past_key_value,
         )
+
+        return encoder_states, decoder_states, torch.zeros_like(encoder_states)[:, 0, 0]
+
         decoder_states = self.dec_base(
             decoder_states,
             position_ids=position_ids,
