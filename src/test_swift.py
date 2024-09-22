@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-swift'
+MODEL_CONFIG = 'test-swift'
 
 
 def main():

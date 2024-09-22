@@ -6,7 +6,7 @@ import numpy as np
 
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
-    FullRotaryAttention,
+    RotaryAttention,
     FullGLU
 )
 
@@ -166,21 +166,16 @@ class SwiftAttention(nn.Module):
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
 
-        self.io = SwiftIO(config)
+        self.hidden_size = config.hidden_size
+        self.qkv_size = config.attention_head_size * config.num_attention_heads
 
-        # operations
-        self.enc_attn = FullRotaryAttention(
-            config.hidden_size,
-            config.attention_head_size,
-            config.num_attention_heads,
-            config.num_registers,
-            True,
-            config.rope_fraction,
-            config.max_sequence_length,
-            config.rope_base,
-            layer_idx
-        )
-        self.dec_attn = FullRotaryAttention(
+        self.enc_QKV = nn.Linear(config.hidden_size, 3*self.qkv_size, bias=False)
+        self.enc_O = nn.Linear(self.qkv_size, config.hidden_size, bias=False)
+
+        self.dec_QKV = nn.Linear(config.hidden_size, 3*self.qkv_size, bias=False)
+        self.dec_O = nn.Linear(self.qkv_size, config.hidden_size, bias=False)
+
+        self.attn = RotaryAttention(
             config.hidden_size,
             config.attention_head_size,
             config.num_attention_heads,
@@ -195,49 +190,33 @@ class SwiftAttention(nn.Module):
 
     def forward(
         self,
-        encoder_states,
-        decoder_states,
-        mask,
+        encoder_x,
+        decoder_x,
         position_ids=None,
         attention_mask=None,
         past_key_value=None,
     ):
-        encoder_x, decoder_x = self.io.enter(
-            encoder_states,
-            decoder_states,
-            mask
-        )
+        enc_qkv = self.enc_QKV(encoder_x)
+        dec_qkv = self.dec_QKV(decoder_x)
+        qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
 
-        enc_attn_out = self.enc_attn(
-            encoder_x,
+        enc_y, dec_y = self.attn(
+            *qkv.chunk(3, dim=-1),
             position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
-        dec_attn_out = self.dec_attn(
-            decoder_x,
-            position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
+            attention_mask,
+            past_key_value
+        ).chunk(2, dim=0)
 
-        encoder_states, decoder_states = self.io.exit(
-            encoder_states,
-            decoder_states,
-            mask,
-            enc_attn_out,
-            dec_attn_out
-        )
+        enc_out = self.enc_O(enc_y)
+        dec_out = self.dec_O(dec_y)
 
-        return encoder_states, decoder_states
-    
+        return enc_out, dec_out
+
 
 class SwiftGLU(nn.Module):
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
-
-        self.io = SwiftIO(config)
 
         # operations
         self.enc_mlp = FullGLU(
@@ -254,28 +233,13 @@ class SwiftGLU(nn.Module):
 
     def forward(
         self,
-        encoder_states,
-        decoder_states,
-        mask
+        encoder_x,
+        decoder_x,
     ):
-        encoder_x, decoder_x = self.io.enter(
-            encoder_states,
-            decoder_states,
-            mask
-        )
-
         enc_mlp_out = self.enc_mlp(encoder_x)
         dec_mlp_out = self.dec_mlp(decoder_x)
 
-        encoder_states, decoder_states = self.io.exit(
-            encoder_states,
-            decoder_states,
-            mask,
-            enc_mlp_out,
-            dec_mlp_out
-        )
-
-        return encoder_states, decoder_states
+        return enc_mlp_out, dec_mlp_out
 
 
 class SwiftVAE(nn.Module):
@@ -285,8 +249,6 @@ class SwiftVAE(nn.Module):
 
         self.hidden_size = config.hidden_size
         self.z_size = config.z_size
-
-        self.io = SwiftIO(config)
 
         self.enc_mu_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
         self.enc_log_sigma_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
@@ -300,16 +262,10 @@ class SwiftVAE(nn.Module):
     
     def forward(
         self,
-        encoder_states,
-        decoder_states,
-        mask,
+        encoder_x,
+        decoder_x,
         noise
     ):
-        encoder_x, decoder_x = self.io.enter(
-            encoder_states,
-            decoder_states,
-            mask
-        )
 
         enc_mu = self.enc_mu_proj(encoder_x) * self.z_scale
         enc_log_sigma = self.enc_log_sigma_proj(encoder_x) * self.z_scale
@@ -322,27 +278,21 @@ class SwiftVAE(nn.Module):
         enc_y = self.enc_out(z)
         dec_y = self.dec_out(z)
 
-        encoder_states, decoder_states = self.io.exit(
-            encoder_states,
-            decoder_states,
-            mask,
-            enc_y,
-            dec_y
-        )
-
         kl = (
             torch.log(enc_sigma)
             + 0.5 * (enc_sigma**2 + (enc_mu - dec_mu)**2)
             - 0.5
         ).sum(-1).sum(-1)
 
-        return encoder_states, decoder_states, kl
+        return enc_y, dec_y, kl
 
 
 class SwiftLayer(nn.Module):
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
+
+        self.io = SwiftIO(config)
 
         self.attention = SwiftAttention(config, layer_idx)
         self.mlp = SwiftGLU(config, layer_idx)
@@ -360,26 +310,35 @@ class SwiftLayer(nn.Module):
         past_key_value=None,
     ):
 
-        encoder_states, decoder_states = self.attention(
-            encoder_states,
-            decoder_states,
-            mask,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value
-        )
-
-        encoder_states, decoder_states = self.mlp(
+        encoder_x, decoder_x = self.io.enter(
             encoder_states,
             decoder_states,
             mask
         )
 
-        encoder_states, decoder_states, kl = self.vae(
+        enc_attn_out, dec_attn_out = self.attention(
+            encoder_x,
+            decoder_x,
+            position_ids,
+            attention_mask,
+            past_key_value
+        )
+        enc_mlp_out, dec_mlp_out = self.mlp(
+            encoder_x,
+            decoder_x
+        )
+        enc_vae_out, dec_vae_out, kl = self.vae(
+            encoder_x,
+            decoder_x,
+            noise
+        )
+
+        encoder_states, decoder_states = self.io.exit(
             encoder_states,
             decoder_states,
             mask,
-            noise
+            enc_attn_out + enc_mlp_out + enc_vae_out,
+            dec_attn_out + dec_mlp_out + dec_vae_out
         )
 
         return encoder_states, decoder_states, kl

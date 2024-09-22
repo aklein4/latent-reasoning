@@ -18,7 +18,7 @@ num_layers: 24
 hidden_act: silu
 norm_eps: 0.00001
 
-rope_fraction: 1
+rope_fraction: 2
 rope_base: 10000
 
 z_size: 256
