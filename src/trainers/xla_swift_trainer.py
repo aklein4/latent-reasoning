@@ -72,7 +72,7 @@ class XLASwiftTrainer(BaseXLATrainer):
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
         )
 
-        w_kl = self.kl_w * min(1, step / self.w_kl_warmup)
+        w_kl = self.kl_w * min(1, step / self.kl_w_warmup)
         results.loss = self.loss(results.token_loss, results.kl_loss, w_kl)
         results.w_kl = torch.full_like(results.kl_loss, w_kl)
 
