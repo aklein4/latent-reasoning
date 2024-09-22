@@ -6,8 +6,9 @@ import numpy as np
 
 from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
+    FusedLinear,
     RotaryAttention,
-    FullGLU
+    GLU
 )
 
 
@@ -43,7 +44,6 @@ class SwiftConfig(XLAConfig):
     """
 
     model_type = 'swift'
-
 
     def __init__(
         self,
@@ -86,7 +86,7 @@ class SwiftConfig(XLAConfig):
         super().__init__(*args, **kwargs)
 
 
-class SwiftIO(nn.Module):
+class SwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
 
@@ -102,80 +102,40 @@ class SwiftIO(nn.Module):
         self.enc_bias.special_inited = True
         self.dec_bias.special_inited = True
         self.enc_filter.special_inited = True
-        self.dec_filter.special_init = True
+        self.dec_filter.special_inited = True
 
-
-    def __init__(self, config: SwiftConfig):
-        super().__init__()
-
-        self.hidden_size = config.hidden_size
-
-        self.enc_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
-        self.dec_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
-
-        self.enc_scale = nn.Embedding(2, config.hidden_size)
-        self.dec_scale = nn.Embedding(2, config.hidden_size)
-        
-        self.enc_bias = nn.Embedding(2, config.hidden_size)
-        self.dec_bias = nn.Embedding(2, config.hidden_size)
-
-        self.enc_filter = nn.Embedding(2, config.hidden_size)
-        self.dec_filter = nn.Embedding(2, config.hidden_size)
-
-
-    def enter(
-        self,
-        encoder_states,
-        decoder_states,
-        mask,
-    ):
-        encoder_x = (
-            self.enc_bias(mask) +
-            (1+self.enc_scale(mask)) * self.enc_norm(encoder_states)
-        )
-        decoder_x = (
-            self.dec_bias(mask) +
-            (1+self.dec_scale(mask)) * self.dec_norm(decoder_states)
-        )
-
-        return encoder_x, decoder_x
-    
-
-    def exit(
-        self,
-        encoder_states,
-        decoder_states,
-        mask,
-        encoder_out,
-        decoder_out,
-    ):
-        encoder_states = (
-            encoder_states +
-            self.enc_filter(mask) * encoder_out
-        )
-        decoder_states = (
-            decoder_states +
-            self.dec_filter(mask) * decoder_out
-        )
-
-        return encoder_states, decoder_states
-
-
-class SwiftAttention(nn.Module):
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
         super().__init__()
 
+        # basic shapes
         self.hidden_size = config.hidden_size
+        self.z_size = config.z_size
         self.qkv_size = config.attention_head_size * config.num_attention_heads
 
-        self.enc_QKV = nn.Linear(config.hidden_size, 3*self.qkv_size, bias=False)
-        self.enc_O = nn.Linear(self.qkv_size, config.hidden_size, bias=False)
+        # norms
+        self.enc_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
+        self.dec_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
+        
+        # in parameters
+        self.enc_scale = nn.Embedding(2, config.hidden_size)
+        self.dec_scale = nn.Embedding(2, config.hidden_size)
+        self.enc_bias = nn.Embedding(2, config.hidden_size)
+        self.dec_bias = nn.Embedding(2, config.hidden_size)
 
-        self.dec_QKV = nn.Linear(config.hidden_size, 3*self.qkv_size, bias=False)
-        self.dec_O = nn.Linear(self.qkv_size, config.hidden_size, bias=False)
+        # input projections
+        self.enc_up = FusedLinear(
+            config.hidden_size,
+            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size]*2,
+            bias=False
+        )
+        self.dec_up = FusedLinear(
+            config.hidden_size,
+            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size],
+            bias=False
+        )
 
-        self.attn = RotaryAttention(
+        self.attention = RotaryAttention(
             config.hidden_size,
             config.attention_head_size,
             config.num_attention_heads,
@@ -186,117 +146,27 @@ class SwiftAttention(nn.Module):
             config.rope_base,
             layer_idx
         )
-
-
-    def forward(
-        self,
-        encoder_x,
-        decoder_x,
-        position_ids=None,
-        attention_mask=None,
-        past_key_value=None,
-    ):
-        enc_qkv = self.enc_QKV(encoder_x)
-        dec_qkv = self.dec_QKV(decoder_x)
-        qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
-
-        enc_y, dec_y = self.attn(
-            *qkv.chunk(3, dim=-1),
-            position_ids,
-            attention_mask,
-            past_key_value
-        ).chunk(2, dim=0)
-
-        enc_out = self.enc_O(enc_y)
-        dec_out = self.dec_O(dec_y)
-
-        return enc_out, dec_out
-
-
-class SwiftGLU(nn.Module):
-
-    def __init__(self, config: SwiftConfig, layer_idx: int):
-        super().__init__()
-
-        # operations
-        self.enc_mlp = FullGLU(
-            config.hidden_size,
-            config.mlp_size,
-            config.hidden_act
-        )
-        self.dec_mlp = FullGLU(
-            config.hidden_size,
-            config.mlp_size,
+        self.mlp = GLU(
             config.hidden_act
         )
 
+        self.enc_down = FusedLinear(
+            [self.qkv_size, config.mlp_size, self.z_size],
+            config.hidden_size,
+            bias=False
+        )
+        self.dec_down = FusedLinear(
+            [self.qkv_size, config.mlp_size, self.z_size],
+            config.hidden_size,
+            bias=False
+        )
 
-    def forward(
-        self,
-        encoder_x,
-        decoder_x,
-    ):
-        enc_mlp_out = self.enc_mlp(encoder_x)
-        dec_mlp_out = self.dec_mlp(decoder_x)
+        # output filters
+        self.enc_filter = nn.Embedding(2, config.hidden_size)
+        self.dec_filter = nn.Embedding(2, config.hidden_size)
 
-        return enc_mlp_out, dec_mlp_out
-
-
-class SwiftVAE(nn.Module):
-
-    def __init__(self, config: SwiftConfig, layer_idx: int):
-        super().__init__()
-
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-
-        self.enc_mu_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
-        self.enc_log_sigma_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
-        self.dec_mu_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
-
-        self.enc_out = nn.Linear(self.z_size, self.hidden_size, bias=False)
-        self.dec_out = nn.Linear(self.z_size, self.hidden_size, bias=False)
-
+        # z scale
         self.z_scale = np.sqrt(config.z_over_scale / (config.z_size * config.num_layers))
-
-    
-    def forward(
-        self,
-        encoder_x,
-        decoder_x,
-        noise
-    ):
-
-        enc_mu = self.enc_mu_proj(encoder_x) * self.z_scale
-        enc_log_sigma = self.enc_log_sigma_proj(encoder_x) * self.z_scale
-        dec_mu = self.dec_mu_proj(decoder_x) * self.z_scale
-
-        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
-
-        z = enc_mu + enc_sigma * noise
-
-        enc_y = self.enc_out(z)
-        dec_y = self.dec_out(z)
-
-        kl = (
-            torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu - dec_mu)**2)
-            - 0.5
-        ).sum(-1).sum(-1)
-
-        return enc_y, dec_y, kl
-
-
-class SwiftLayer(nn.Module):
-
-    def __init__(self, config: SwiftConfig, layer_idx: int):
-        super().__init__()
-
-        self.io = SwiftIO(config)
-
-        self.attention = SwiftAttention(config, layer_idx)
-        self.mlp = SwiftGLU(config, layer_idx)
-        self.vae = SwiftVAE(config, layer_idx)
 
 
     def forward(
@@ -310,36 +180,40 @@ class SwiftLayer(nn.Module):
         past_key_value=None,
     ):
 
-        encoder_x, decoder_x = self.io.enter(
-            encoder_states,
-            decoder_states,
-            mask
+        enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(
+            self.enc_bias(mask) + (1+self.enc_scale(mask)) * self.enc_norm(encoder_states)
+        )
+        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(
+            self.dec_bias(mask) + (1+self.dec_scale(mask)) * self.dec_norm(decoder_states)
         )
 
+        qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
         enc_attn_out, dec_attn_out = self.attention(
-            encoder_x,
-            decoder_x,
+            *qkv.chunk(3, dim=-1),
             position_ids,
-            attention_mask,
-            past_key_value
-        )
-        enc_mlp_out, dec_mlp_out = self.mlp(
-            encoder_x,
-            decoder_x
-        )
-        enc_vae_out, dec_vae_out, kl = self.vae(
-            encoder_x,
-            decoder_x,
-            noise
-        )
+            attention_mask=attention_mask,
+            past_key_value=past_key_value
+        ).chunk(2, dim=0)
 
-        encoder_states, decoder_states = self.io.exit(
-            encoder_states,
-            decoder_states,
-            mask,
-            enc_attn_out + enc_mlp_out + enc_vae_out,
-            dec_attn_out + dec_mlp_out + dec_vae_out
-        )
+        enc_mlp_out = self.mlp(enc_gate, enc_val)
+        dec_mlp_out = self.mlp(dec_gate, dec_val)
+
+        enc_mu = enc_mu * self.z_scale
+        enc_log_sigma = enc_log_sigma * self.z_scale
+        dec_mu = dec_mu * self.z_scale
+
+        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
+
+        z = enc_mu + enc_sigma * noise
+
+        encoder_states = encoder_states + self.enc_filter(mask) * self.enc_down(enc_attn_out, enc_mlp_out, z)
+        decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
+
+        kl = (
+            -torch.log(enc_sigma)
+            + 0.5 * (enc_sigma**2 + (enc_mu - dec_mu)**2)
+            - 0.5
+        ).sum(-1).sum(-1)
 
         return encoder_states, decoder_states, kl
         
@@ -383,7 +257,7 @@ class SwiftModel(XLAModel):
         ])
 
         # outputs
-        self.norm = nn.LayerNorm(config.hidden_size, config.norm_eps)
+        self.norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
@@ -426,3 +300,4 @@ class SwiftModel(XLAModel):
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, kl
+    
