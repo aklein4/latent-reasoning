@@ -11,6 +11,7 @@ mlp_size: 1536
 
 attention_head_size: 64
 num_attention_heads: 8
+num_registers: 0
 
 num_layers: 48
 
