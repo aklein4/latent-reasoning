@@ -22,8 +22,8 @@ class XLASwiftTrainer(BaseXLATrainer):
     def kl_loss(self, kl, mask):
         return kl.mean() / mask.shape[1]
 
-    def loss(self, token_loss, kl_loss):
-        return self.token_w * token_loss + self.kl_w * kl_loss
+    def loss(self, token_loss, kl_loss, w_kl):
+        return self.token_w * token_loss + w_kl * kl_loss
     
 
     def clip_perc(self, log_probs, mask):
@@ -71,7 +71,10 @@ class XLASwiftTrainer(BaseXLATrainer):
             kl_per_token=self.kl_per_token(kl, mask),
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
         )
-        results.loss = self.loss(results.token_loss, results.kl_loss)
+
+        w_kl = self.kl_w * min(1, step / self.w_kl_warmup)
+        results.loss = self.loss(results.token_loss, results.kl_loss, w_kl)
+        results.w_kl = torch.full_like(results.kl_loss, w_kl)
 
         results.one_minus_acc = 1 - results.acc
         results.one_minus_clip_perc = 1 - results.clip_perc

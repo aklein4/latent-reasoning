@@ -29,7 +29,7 @@ def main():
 
     logits, kl = model(x, mask)
 
-    print(kl / mask.float().sum(-1))
+    print(kl / mask.shape[1])
 
 
 if __name__ == '__main__':

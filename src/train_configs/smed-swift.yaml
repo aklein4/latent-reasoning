@@ -23,5 +23,7 @@ weight_decay: 0.1
 checkpoint_interval: 5000
 
 token_w: 10.0
-kl_w: 0.3
+kl_w: 1.0
+kl_w_warmup: 1000
+
 clip_prob: 0.75

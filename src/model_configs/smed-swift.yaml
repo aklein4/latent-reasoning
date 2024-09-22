@@ -22,6 +22,6 @@ rope_fraction: 1
 rope_base: 10000
 
 z_size: 256
-z_over_scale: 10
+z_over_scale: 5
 
 gradient_checkpointing: false
