@@ -119,11 +119,9 @@ class FullRotaryAttention(nn.Module):
 
         qkv_size = attention_head_size * num_attention_heads
         
-        self.QKV = FusedLinear(
-            hidden_size,
-            [qkv_size]*3,
-            bias=True
-        )
+        self.Q = nn.Linear(hidden_size, qkv_size, bias=False)
+        self.K = nn.Linear(hidden_size, qkv_size, bias=False)
+        self.V = nn.Linear(hidden_size, qkv_size, bias=False)
         self.O = nn.Linear(qkv_size, hidden_size, bias=False)
 
         self.attn = RotaryAttention(
@@ -146,7 +144,9 @@ class FullRotaryAttention(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-        q, k, v = self.QKV(hidden_states)
+        q = self.Q(hidden_states)
+        k = self.K(hidden_states)
+        v = self.V(hidden_states)
 
         attn_output = self.attn(q, k, v, position_ids, attention_mask, past_key_value)
 

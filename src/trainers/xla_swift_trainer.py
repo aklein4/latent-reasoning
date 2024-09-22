@@ -19,12 +19,21 @@ class XLASwiftTrainer(BaseXLATrainer):
         )
         return -clipped_log_probs.sum(-1).mean() / mask.shape[1]
 
-    def kl_loss(self, kl, mask):
-        return kl.mean() / mask.shape[1]
+    def kl_loss(self, kl, mask, kl_clip):
+        kl = kl / mask.shape[1]
+        kl = torch.clamp(kl, min=kl_clip)
 
-    def loss(self, token_loss, kl_loss, w_kl):
-        return self.token_w * token_loss + w_kl * kl_loss
+        return kl.mean()
+
+    def loss(self, token_loss, kl_loss):
+        return self.token_w * token_loss + self.kl_w * kl_loss
     
+
+    def kl_clip_perc(self, kl, mask, kl_clip):
+        kl = kl / mask.shape[1]
+        clipped = (kl < kl_clip).float()
+
+        return clipped.mean()
 
     def clip_perc(self, log_probs, mask):
         clipped = (log_probs > np.log(self.clip_prob)).float()
@@ -61,9 +70,12 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
+        kl_clip = self.kl_clip_max * (1-min(1, step / self.kl_clip_warmup))
+
         results = DotDict(
             token_loss=self.token_loss(log_probs, mask),
-            kl_loss=self.kl_loss(kl, mask),
+            kl_loss=self.kl_loss(kl, mask, kl_clip),
+            kl_clip_perc=self.kl_clip_perc(kl, mask, kl_clip),
             clip_perc=self.clip_perc(log_probs, mask),
             acc=self.acc(logits, x, mask),
             logp_per_token=self.logp_per_token(log_probs, mask),
@@ -71,10 +83,9 @@ class XLASwiftTrainer(BaseXLATrainer):
             kl_per_token=self.kl_per_token(kl, mask),
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
         )
+        results.loss = self.loss(results.token_loss, results.kl_loss)
 
-        w_kl = self.kl_w * min(1, step / self.kl_w_warmup)
-        results.loss = self.loss(results.token_loss, results.kl_loss, w_kl)
-        results.w_kl = torch.full_like(results.kl_loss, w_kl)
+        results.kl_clip = torch.full_like(results.loss, kl_clip)
 
         results.one_minus_acc = 1 - results.acc
         results.one_minus_clip_perc = 1 - results.clip_perc

@@ -24,6 +24,8 @@ checkpoint_interval: 5000
 
 token_w: 10.0
 kl_w: 1.0
-kl_w_warmup: 1000
+
+kl_clip_max: 20
+kl_clip_warmup: 1000
 
 clip_prob: 0.75
