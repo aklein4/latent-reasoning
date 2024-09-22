@@ -14,16 +14,13 @@ num_attention_heads: 8
 
 num_layers: 48
 
-use_qkv_bias: true
 hidden_act: silu
-layer_norm_eps: 0.00001
+norm_eps: 0.00001
 
-use_rope: true
 rope_fraction: 2
 rope_base: 10000
 
-z_size: 16
-base_t: 0.05
-t_init_scale: 0.05
+z_size: 256
+z_over_scale: 5
 
 gradient_checkpointing: false
