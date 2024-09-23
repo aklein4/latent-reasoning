@@ -18,16 +18,16 @@ class XLASwiftTrainer(BaseXLATrainer):
             torch.clamp(log_probs, max=np.log(self.clip_prob)),
             log_probs
         )
-        return -clipped_log_probs.sum() / mask.float().sum()
+        return -clipped_log_probs.mean()
 
     def kl_loss(self, kl, mask, kl_clip):
         # calculate clipped kl per token
         kl_per = kl / mask.float().sum(-1)
         clipped = torch.clamp(kl_per, min=kl_clip)
-        # scale back to total kl
-        scaled = clipped * mask.float().sum(-1)
-        # return kl per token
-        return scaled.sum() / mask.float().sum()
+        clipped = clipped * mask.float().sum(-1)
+
+        # return kl with every token weighted equally
+        return clipped.mean() / mask.shape[1]
 
     def loss(self, token_loss, kl_loss):
         return self.token_w * token_loss + self.kl_w * kl_loss
