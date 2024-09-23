@@ -21,7 +21,9 @@ norm_eps: 0.00001
 rope_fraction: 2
 rope_base: 10000
 
-z_size: 256
+z_size: 128
+iaf_multiplier: 4
+
 z_over_scale: 10
 
 gradient_checkpointing: false

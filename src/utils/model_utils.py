@@ -14,29 +14,49 @@ from transformers.activations import ACT2FN
 import utils.constants as constants
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6, affine=True):
+class LinearIAF(nn.Module):
+
+    def __init__(self, hidden_size, multiplier):
         super().__init__()
 
-        self.affine = affine
-        self.weight = None
-        if affine:
-            self.weight = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        
-        self.variance_epsilon = eps
+        self.hidden_size = hidden_size
+        self.multiplier = multiplier
+        self.inner_size = hidden_size * multiplier
+
+        self.up = nn.Parameter(torch.randn(self.inner_size, hidden_size))
+        self.down = nn.Parameter(torch.randn(hidden_size, self.inner_size))
+
+        up_mask = torch.tril(torch.ones(hidden_size, self.hidden_size), diagonal=0)
+        up_mask = up_mask.repeat_interleave(self.multiplier, dim=0)
+        self.register_buffer('up_mask', up_mask)
+
+        down_mask = torch.tril(torch.ones(self.hidden_size, self.hidden_size), diagonal=-1)
+        down_mask = down_mask.repeat_interleave(self.multiplier, dim=1)
+        self.register_buffer('down_mask', down_mask)
+
+        check = torch.ones(hidden_size)
+        check_out = F.linear(check, up_mask)
+        self.up.data = (self.up.data / torch.sqrt(check_out+1e-7).unsqueeze(1)).detach()
+
+        check = torch.ones(self.inner_size)
+        check_out = F.linear(check, down_mask)
+        self.down.data = (self.down.data / torch.sqrt(check_out+1e-7).unsqueeze(1)).detach()
 
 
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
+    def forward(self, x, inner_scale, bias):
+        up = F.linear(
+            x,
+            self.up * self.up_mask
+        ) * inner_scale
 
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        
-        if self.affine:
-            hidden_states = hidden_states * (1+self.weight)
-        
-        return hidden_states.to(input_dtype)
+        return F.linear(
+            up,
+            self.down * self.down_mask,
+        ) + bias
+
+
+class RMSNorm(nn.Module):
+    pass
 
 
 class FusedLinear(nn.Module):
