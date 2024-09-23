@@ -77,7 +77,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         clip_mask = mask & (log_probs < second + np.log(self.logit_gap))
 
         results = DotDict(
-            token_loss=self.token_loss(log_probs, mask, clip_mask),
+            token_loss=self.token_loss(log_probs, clip_mask),
             kl_loss=self.kl_loss(kl, mask, kl_clip),
             kl_clip_perc=self.kl_clip_perc(kl, mask, kl_clip),
             clip_perc=self.clip_perc(mask, clip_mask),
