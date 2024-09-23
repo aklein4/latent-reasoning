@@ -74,7 +74,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
         # get the second highest logit
-        cloned = log_probs.detach()
+        cloned = logits.detach()
         cloned = cloned.view(-1, logits.shape[-1])
         cloned[ar, x.view(-1)] = float('-inf')
         second = cloned.max(-1).values.view(*x.shape)
