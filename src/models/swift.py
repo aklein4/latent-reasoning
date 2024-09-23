@@ -179,6 +179,7 @@ class SwiftLayer(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
+        float_mask = mask.to(encoder_states.dtype).unsqueeze(-1)
 
         enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(
             self.enc_bias(mask) + (1+self.enc_scale(mask)) * self.enc_norm(encoder_states)
@@ -198,13 +199,13 @@ class SwiftLayer(nn.Module):
         enc_mlp_out = self.mlp(enc_gate, enc_val)
         dec_mlp_out = self.mlp(dec_gate, dec_val)
 
-        enc_mu = enc_mu * self.z_scale
-        enc_log_sigma = enc_log_sigma * self.z_scale
-        dec_mu = dec_mu * self.z_scale
+        enc_mu = enc_mu * self.z_scale * float_mask
+        enc_log_sigma = enc_log_sigma * self.z_scale * float_mask
+        dec_mu = dec_mu * self.z_scale * float_mask
 
         enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
 
-        z = enc_mu + enc_sigma * noise
+        z = (enc_mu + enc_sigma * noise) * float_mask
 
         encoder_states = encoder_states + self.enc_filter(mask) * self.enc_down(enc_attn_out, enc_mlp_out, z)
         decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)

@@ -12,25 +12,29 @@ class XLASwiftTrainer(BaseXLATrainer):
 
 
     def token_loss(self, log_probs, mask):
+        # each token gets the same weight
         clipped_log_probs = torch.where(
             mask,
             torch.clamp(log_probs, max=np.log(self.clip_prob)),
             log_probs
         )
-        return -clipped_log_probs.sum(-1).mean() / mask.shape[1]
+        return -clipped_log_probs.sum() / mask.float().sum()
 
     def kl_loss(self, kl, mask, kl_clip):
-        kl = kl / mask.shape[1]
-        kl = torch.clamp(kl, min=kl_clip)
-
-        return kl.mean()
+        # calculate clipped kl per token
+        kl_per = kl / mask.float().sum(-1)
+        clipped = torch.clamp(kl_per, min=kl_clip)
+        # scale back to total kl
+        scaled = clipped * mask.float().sum(-1)
+        # return kl per token
+        return scaled.sum() / mask.float().sum()
 
     def loss(self, token_loss, kl_loss):
         return self.token_w * token_loss + self.kl_w * kl_loss
     
 
     def kl_clip_perc(self, kl, mask, kl_clip):
-        kl = kl / mask.shape[1]
+        kl = kl / mask.float().sum(-1)
         clipped = (kl < kl_clip).float()
 
         return clipped.mean()
@@ -62,6 +66,7 @@ class XLASwiftTrainer(BaseXLATrainer):
 
 
     def train_step(self, step, model, x, mask):
+        kl_clip = self.kl_clip_max * (1-min(1, step / self.kl_clip_warmup))
 
         logits, kl = model(x, mask)
         
@@ -69,8 +74,6 @@ class XLASwiftTrainer(BaseXLATrainer):
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
         log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
-
-        kl_clip = self.kl_clip_max * (1-min(1, step / self.kl_clip_warmup))
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, mask),
