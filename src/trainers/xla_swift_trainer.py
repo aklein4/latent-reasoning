@@ -74,11 +74,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
         # get the second highest logit
-        cloned = logits.detach().clone()
-        cloned = cloned.view(-1, logits.shape[-1])
-        cloned[ar, x.view(-1)] = float('-inf')
-        second = cloned.max(-1).values.view(*x.shape)
-        clip_mask = mask & (log_probs < second + np.log(self.logit_gap))
+        clip_mask = mask & (log_probs < np.log(self.clip_prob))
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),

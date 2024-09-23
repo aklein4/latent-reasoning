@@ -97,12 +97,18 @@ class SwiftLayer(nn.Module):
         self.enc_filter.weight.data.zero_()
         self.dec_filter.weight.data.zero_()
 
+        self.cross.linear.weight.data.zero_()
+        if self.cross.linear.bias is not None:
+            self.cross.linear.bias.data.zero_()
+
         self.enc_scale.special_inited = True
         self.dec_scale.special_inited = True
         self.enc_bias.special_inited = True
         self.dec_bias.special_inited = True
         self.enc_filter.special_inited = True
         self.dec_filter.special_inited = True
+
+        self.cross.linear.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
@@ -122,6 +128,13 @@ class SwiftLayer(nn.Module):
         self.dec_scale = nn.Embedding(2, config.hidden_size)
         self.enc_bias = nn.Embedding(2, config.hidden_size)
         self.dec_bias = nn.Embedding(2, config.hidden_size)
+
+        # cross parameters
+        self.cross = FusedLinear(
+            config.hidden_size,
+            [config.hidden_size]*2,
+            bias=False
+        )
 
         # input projections
         self.enc_up = FusedLinear(
@@ -181,12 +194,21 @@ class SwiftLayer(nn.Module):
     ):
         float_mask = mask.to(encoder_states.dtype).unsqueeze(-1)
 
-        enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(
-            self.enc_bias(mask) + (1+self.enc_scale(mask)) * self.enc_norm(encoder_states)
+        # apply conditional cross scaling
+        enc_normed = self.enc_norm(encoder_states)
+        dec_normed = self.dec_norm(decoder_states)
+
+        enc_x = self.enc_bias(mask) + (1+self.enc_scale(mask)) * enc_normed
+        dec_x = self.dec_bias(mask) + (1+self.dec_scale(mask)) * dec_normed
+
+        enc_x = enc_x + torch.where(
+            mask.bool().unsqueeze(-1),
+            *self.cross(dec_x)
         )
-        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(
-            self.dec_bias(mask) + (1+self.dec_scale(mask)) * self.dec_norm(decoder_states)
-        )
+
+        # get outputs
+        enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(enc_x)
+        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(dec_x)
 
         qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
         enc_attn_out, dec_attn_out = self.attention(
