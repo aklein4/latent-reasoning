@@ -11,12 +11,12 @@ from utils.data_utils import DotDict
 class XLASwiftTrainer(BaseXLATrainer):
 
 
-    def token_loss(self, log_probs, mask):
+    def token_loss(self, log_probs, clip_mask):
         # each token gets the same weight
         clipped_log_probs = torch.where(
-            mask,
-            torch.clamp(log_probs, max=np.log(self.clip_prob)),
-            log_probs
+            clip_mask,
+            log_probs,
+            log_probs.detach()
         )
         return -clipped_log_probs.mean()
 
@@ -39,10 +39,8 @@ class XLASwiftTrainer(BaseXLATrainer):
 
         return clipped.mean()
 
-    def clip_perc(self, log_probs, mask):
-        clipped = (log_probs > np.log(self.clip_prob)).float()
-        clipped = torch.where(mask, clipped, torch.zeros_like(clipped))
-        return clipped.sum() / mask.float().sum()
+    def clip_perc(self, mask, clip_mask):
+        return 1 - (clip_mask.float().sum() / mask.float().sum())
 
     def acc(self, logits, x, mask):
         correct = (logits.argmax(-1) == x).float()
@@ -75,11 +73,14 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
+        second = torch.topk(logits, 2, dim=-1).values[:, :, 1]
+        clip_mask = mask & (log_probs < second + np.log(self.logit_gap))
+
         results = DotDict(
-            token_loss=self.token_loss(log_probs, mask),
+            token_loss=self.token_loss(log_probs, mask, clip_mask),
             kl_loss=self.kl_loss(kl, mask, kl_clip),
             kl_clip_perc=self.kl_clip_perc(kl, mask, kl_clip),
-            clip_perc=self.clip_perc(log_probs, mask),
+            clip_perc=self.clip_perc(mask, clip_mask),
             acc=self.acc(logits, x, mask),
             logp_per_token=self.logp_per_token(log_probs, mask),
             logp_per_token_nopad=self.logp_per_token_nopad(log_probs, mask, x, model.config.pad_token_id),
