@@ -39,8 +39,6 @@ class SwiftConfig(XLAConfig):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
-        z_over_scale (`float`):
-            The scale of the initial latent space.
     """
 
     model_type = 'swift'
@@ -59,7 +57,6 @@ class SwiftConfig(XLAConfig):
         rope_fraction=None,
         rope_base=None,
         z_size=None,
-        z_over_scale=None,
         *args,
         **kwargs,
     ):
@@ -81,7 +78,6 @@ class SwiftConfig(XLAConfig):
         self.rope_base = rope_base
 
         self.z_size = z_size
-        self.z_over_scale = z_over_scale
 
         super().__init__(*args, **kwargs)
 
@@ -90,6 +86,7 @@ class SwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
 
+        # conditional io
         self.enc_scale.weight.data.zero_()
         self.dec_scale.weight.data.zero_()
         self.enc_bias.weight.data.zero_()
@@ -109,6 +106,15 @@ class SwiftLayer(nn.Module):
         self.dec_filter.special_inited = True
 
         self.cross.linear.special_inited = True
+
+        # zero init z
+        self.enc_up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.enc_up.total_in))
+        if self.enc_up.linear.bias is not None:
+            self.enc_up.linear.bias.data.zero_()
+        
+        self.enc_up.linear.weight.data[-2*self.z_size:].zero_()
+
+        self.enc_up.linear.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
@@ -144,7 +150,7 @@ class SwiftLayer(nn.Module):
         )
         self.dec_up = FusedLinear(
             config.hidden_size,
-            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size],
+            [3*self.qkv_size] + [config.mlp_size]*2,
             bias=False
         )
 
@@ -179,7 +185,7 @@ class SwiftLayer(nn.Module):
         self.dec_filter = nn.Embedding(2, config.hidden_size)
 
         # z scale
-        self.z_scale = np.sqrt(config.z_over_scale / (config.z_size * config.num_layers))
+        self.z_scale = np.sqrt(1 / (config.z_size * config.num_layers))
 
 
     def forward(
@@ -208,7 +214,7 @@ class SwiftLayer(nn.Module):
 
         # get outputs
         enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(enc_x)
-        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(dec_x)
+        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
 
         qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
         enc_attn_out, dec_attn_out = self.attention(
@@ -223,18 +229,17 @@ class SwiftLayer(nn.Module):
 
         enc_mu = enc_mu * self.z_scale * float_mask
         enc_log_sigma = enc_log_sigma * self.z_scale * float_mask
-        dec_mu = dec_mu * self.z_scale * float_mask
 
         enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
 
         z = (enc_mu + enc_sigma * noise) * float_mask
 
-        encoder_states = encoder_states + self.enc_filter(mask) * self.enc_down(enc_attn_out, enc_mlp_out, z)
-        decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
+        encoder_states = encoder_states + (1+self.enc_filter(mask)) * self.enc_down(enc_attn_out, enc_mlp_out, z)
+        decoder_states = decoder_states + (1+self.dec_filter(mask)) * self.dec_down(dec_attn_out, dec_mlp_out, z)
 
         kl = (
             -torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu - dec_mu)**2)
+            + 0.5 * (enc_sigma**2 + enc_mu**2)
             - 0.5
         ).sum(-1).sum(-1)
 
@@ -255,7 +260,7 @@ class SwiftLayer(nn.Module):
         dec_normed = self.dec_norm(decoder_states)
         dec_x = self.dec_bias(mask) + (1+self.dec_scale(mask)) * dec_normed
 
-        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(dec_x)
+        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
 
         dec_attn_out = self.attention(
             *dec_qkv.chunk(3, dim=-1),
@@ -265,7 +270,7 @@ class SwiftLayer(nn.Module):
         )
         dec_mlp_out = self.mlp(dec_gate, dec_val)
 
-        z = float_mask * (noise + dec_mu)
+        z = float_mask * noise
 
         decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
 

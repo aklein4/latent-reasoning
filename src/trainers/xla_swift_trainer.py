@@ -20,24 +20,13 @@ class XLASwiftTrainer(BaseXLATrainer):
         )
         return -clipped_log_probs.mean()
 
-    def kl_loss(self, kl, mask, kl_clip):
-        # calculate clipped kl per token
-        kl_per = kl / mask.float().sum(-1)
-        clipped = torch.clamp(kl_per, min=kl_clip)
-        clipped = clipped * mask.float().sum(-1)
-
+    def kl_loss(self, kl, mask):
         # return kl with every token weighted equally
-        return clipped.mean() / mask.shape[1]
+        return kl.mean() / mask.shape[1]
 
-    def loss(self, token_loss, kl_loss):
-        return self.token_w * token_loss + self.kl_w * kl_loss
+    def loss(self, token_loss, kl_loss, curr_token_w):
+        return curr_token_w * token_loss + self.kl_w * kl_loss
     
-
-    def kl_clip_perc(self, kl, mask, kl_clip):
-        kl = kl / mask.float().sum(-1)
-        clipped = (kl < kl_clip).float()
-
-        return clipped.mean()
 
     def clip_perc(self, mask, clip_mask):
         return 1 - (clip_mask.float().sum() / mask.float().sum())
@@ -64,7 +53,7 @@ class XLASwiftTrainer(BaseXLATrainer):
 
 
     def train_step(self, step, model, x, mask):
-        kl_clip = self.kl_clip_max * (1-min(1, step / self.kl_clip_warmup))
+        curr_token_w = self.token_w * min(1, step / self.token_w_steps)
 
         logits, kl = model(x, mask)
         
@@ -73,13 +62,12 @@ class XLASwiftTrainer(BaseXLATrainer):
         log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
 
-        # get the second highest logit
+        # current version is raw logit clipping
         clip_mask = mask & (log_probs < np.log(self.clip_prob))
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
-            kl_loss=self.kl_loss(kl, mask, kl_clip),
-            kl_clip_perc=self.kl_clip_perc(kl, mask, kl_clip),
+            kl_loss=self.kl_loss(kl, mask),
             clip_perc=self.clip_perc(mask, clip_mask),
             acc=self.acc(logits, x, mask),
             logp_per_token=self.logp_per_token(log_probs, mask),
@@ -87,9 +75,9 @@ class XLASwiftTrainer(BaseXLATrainer):
             kl_per_token=self.kl_per_token(kl, mask),
             kl_per_token_nopad=self.kl_per_token_nopad(kl, mask, x, model.config.pad_token_id),
         )
-        results.loss = self.loss(results.token_loss, results.kl_loss)
+        results.loss = self.loss(results.token_loss, results.kl_loss, curr_token_w)
 
-        results.kl_clip = torch.full_like(results.loss, kl_clip)
+        results.curr_token_w = torch.full_like(results.loss, curr_token_w)
 
         results.one_minus_acc = 1 - results.acc
         results.one_minus_clip_perc = 1 - results.clip_perc
