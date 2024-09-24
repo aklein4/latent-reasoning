@@ -8,8 +8,7 @@ from models.xla import XLAConfig, XLAModel
 from utils.model_utils import (
     FusedLinear,
     RotaryAttention,
-    GLU,
-    LinearIAF
+    GLU
 )
 
 
@@ -40,8 +39,6 @@ class SwiftConfig(XLAConfig):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
-        iaf_multiplier (`int`):
-            The number of times to multiply the hidden size for the IAF layers.
         z_over_scale (`float`):
             The scale of the initial latent space.
     """
@@ -62,7 +59,6 @@ class SwiftConfig(XLAConfig):
         rope_fraction=None,
         rope_base=None,
         z_size=None,
-        iaf_multiplier=None,
         z_over_scale=None,
         *args,
         **kwargs,
@@ -85,8 +81,6 @@ class SwiftConfig(XLAConfig):
         self.rope_base = rope_base
 
         self.z_size = z_size
-        self.iaf_multiplier = iaf_multiplier
-        
         self.z_over_scale = z_over_scale
 
         super().__init__(*args, **kwargs)
@@ -124,7 +118,6 @@ class SwiftLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.z_size = config.z_size
         self.qkv_size = config.attention_head_size * config.num_attention_heads
-        self.iaf_total = config.iaf_multiplier * self.z_size
 
         # norms
         self.enc_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
@@ -146,12 +139,12 @@ class SwiftLayer(nn.Module):
         # input projections
         self.enc_up = FusedLinear(
             config.hidden_size,
-            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size]*2 + [self.iaf_total]*2,
+            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size]*2,
             bias=False
         )
         self.dec_up = FusedLinear(
             config.hidden_size,
-            [3*self.qkv_size] + [config.mlp_size]*2,
+            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size],
             bias=False
         )
 
@@ -169,8 +162,6 @@ class SwiftLayer(nn.Module):
         self.mlp = GLU(
             config.hidden_act
         )
-        self.mu_iaf = LinearIAF(self.z_size, config.iaf_multiplier)
-        self.sigma_iaf = LinearIAF(self.z_size, config.iaf_multiplier)
 
         self.enc_down = FusedLinear(
             [self.qkv_size, config.mlp_size, self.z_size],
@@ -187,8 +178,8 @@ class SwiftLayer(nn.Module):
         self.enc_filter = nn.Embedding(2, config.hidden_size)
         self.dec_filter = nn.Embedding(2, config.hidden_size)
 
-        # z scale, 2 comes from iaf
-        self.z_scale = np.sqrt(config.z_over_scale / (2 * config.z_size * config.num_layers))
+        # z scale
+        self.z_scale = np.sqrt(config.z_over_scale / (config.z_size * config.num_layers))
 
 
     def forward(
@@ -216,8 +207,8 @@ class SwiftLayer(nn.Module):
         )
 
         # get outputs
-        enc_qkv, enc_gate, enc_val, mu, log_sigma, mu_gate, sigma_gate = self.enc_up(enc_x)
-        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
+        enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(enc_x)
+        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(dec_x)
 
         qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
         enc_attn_out, dec_attn_out = self.attention(
@@ -230,25 +221,26 @@ class SwiftLayer(nn.Module):
         enc_mlp_out = self.mlp(enc_gate, enc_val)
         dec_mlp_out = self.mlp(dec_gate, dec_val)
 
-        mu = self.z_scale * float_mask * self.mu_iaf(noise, mu_gate, mu)
-        log_sigma = self.z_scale * float_mask * self.sigma_iaf(noise, sigma_gate, log_sigma)
+        enc_mu = enc_mu * self.z_scale * float_mask
+        enc_log_sigma = enc_log_sigma * self.z_scale * float_mask
+        dec_mu = dec_mu * self.z_scale * float_mask
 
-        sigma = F.softplus(log_sigma + np.log(np.e - 1))
+        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
 
-        z = (mu + sigma * noise) * float_mask
+        z = (enc_mu + enc_sigma * noise) * float_mask
 
         encoder_states = encoder_states + self.enc_filter(mask) * self.enc_down(enc_attn_out, enc_mlp_out, z)
         decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
 
         kl = (
-            -torch.log(sigma)
-            + 0.5 * (sigma**2 + mu**2)
+            -torch.log(enc_sigma)
+            + 0.5 * (enc_sigma**2 + (enc_mu - dec_mu)**2)
             - 0.5
         ).sum(-1).sum(-1)
 
         return encoder_states, decoder_states, kl
         
-    
+
     def sample(
         self,
         decoder_states,
@@ -263,7 +255,7 @@ class SwiftLayer(nn.Module):
         dec_normed = self.dec_norm(decoder_states)
         dec_x = self.dec_bias(mask) + (1+self.dec_scale(mask)) * dec_normed
 
-        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
+        dec_qkv, dec_gate, dec_val, dec_mu = self.dec_up(dec_x)
 
         dec_attn_out = self.attention(
             *dec_qkv.chunk(3, dim=-1),
@@ -273,7 +265,7 @@ class SwiftLayer(nn.Module):
         )
         dec_mlp_out = self.mlp(dec_gate, dec_val)
 
-        z = float_mask * noise
+        z = float_mask * (noise + dec_mu)
 
         decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
 
