@@ -248,6 +248,37 @@ class SwiftLayer(nn.Module):
 
         return encoder_states, decoder_states, kl
         
+    
+    def sample(
+        self,
+        decoder_states,
+        mask,
+        noise,
+        position_ids=None,
+        attention_mask=None,
+        past_key_value=None,
+    ):
+        float_mask = mask.to(decoder_states.dtype).unsqueeze(-1)
+
+        dec_normed = self.dec_norm(decoder_states)
+        dec_x = self.dec_bias(mask) + (1+self.dec_scale(mask)) * dec_normed
+
+        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
+
+        dec_attn_out = self.attention(
+            *dec_qkv.chunk(3, dim=-1),
+            position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value
+        )
+        dec_mlp_out = self.mlp(dec_gate, dec_val)
+
+        z = float_mask * noise
+
+        decoder_states = decoder_states + self.dec_filter(mask) * self.dec_down(dec_attn_out, dec_mlp_out, z)
+
+        return decoder_states
+
 
 class SwiftModel(XLAModel):
 
@@ -331,4 +362,39 @@ class SwiftModel(XLAModel):
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, kl
+
+
+    def sample(
+        self,
+        input_ids,
+        mask,
+        noise=None
+    ):
+        bs, seq_len = input_ids.shape
+
+        if noise is None:
+            noise = torch.randn(
+                [bs, seq_len, self.num_layers, self.z_size],
+                device=input_ids.device, dtype=self.enc_embs.weight.dtype
+            )
+        long_mask = mask.long()
+
+        decoder_states = torch.where(
+            mask.unsqueeze(-1),
+            self.dec_embs(torch.zeros_like(input_ids)),
+            self.dec_embs(input_ids+1)
+        )
+
+        for i, layer in enumerate(self.layers):
+
+            decoder_states = layer.sample(
+                decoder_states,
+                long_mask,
+                noise[:, :, i],
+            )
+
+        lm_logits = self.lm_head(self.norm(decoder_states))
+        lm_logits = F.log_softmax(lm_logits, dim=-1)
+
+        return lm_logits
     
