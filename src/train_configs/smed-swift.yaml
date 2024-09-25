@@ -26,4 +26,4 @@ kl_w: 1.0
 token_w: 25.0
 
 kl_threshold: 3.0
-acc_threshold: 0.01
+acc_threshold: 0.99

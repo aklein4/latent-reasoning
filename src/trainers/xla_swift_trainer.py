@@ -41,6 +41,9 @@ class XLASwiftTrainer(BaseXLATrainer):
         correct = torch.where(mask, correct, torch.zeros_like(correct))
         return correct.sum() / mask.float().sum()
 
+    def clip_perc(self, mask, clip_mask):
+        return 1 - (clip_mask.float().sum() / mask.float().sum())
+
 
     def logp_per_token(self, log_probs, mask):
         return -log_probs.sum() / mask.float().sum()
@@ -68,13 +71,14 @@ class XLASwiftTrainer(BaseXLATrainer):
 
         # current version is raw logit clipping
         kl_clip = self.kl_per_token(kl, mask) > self.kl_threshold
-        acc_clip = self.acc(logits, x, mask) < self.acc_threshold
+        acc_clip = self.acc(logits, x, mask) > self.acc_threshold
         clip_mask = mask & (torch.argmax(logits, dim=-1) != x)
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
             kl_loss=self.kl_loss(kl, mask),
             acc=self.acc(logits, x, mask),
+            clip_perc=self.clip_perc(mask, clip_mask),
             kl_clip=kl_clip.float(),
             acc_clip=acc_clip.float(),
             logp_per_token=self.logp_per_token(log_probs, mask),
@@ -85,5 +89,6 @@ class XLASwiftTrainer(BaseXLATrainer):
         results.loss = self.loss(results.token_loss, results.kl_loss, kl_clip, acc_clip)
 
         results.one_minus_acc = 1 - results.acc
+        results.one_minus_clip_perc = 1 - results.clip_perc
 
         return results
