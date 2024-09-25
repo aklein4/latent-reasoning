@@ -39,6 +39,8 @@ class SwiftConfig(XLAConfig):
             The base period of the RoPE embeddings.
         z_size (`int`):
             The size of the latent space.
+        z_mlp_mult (`int`):
+            The multiplier for the size of the IAF MLPs.
     """
 
     model_type = 'swift'
@@ -57,6 +59,7 @@ class SwiftConfig(XLAConfig):
         rope_fraction=None,
         rope_base=None,
         z_size=None,
+        z_mlp_mult=None,
         *args,
         **kwargs,
     ):
@@ -78,43 +81,70 @@ class SwiftConfig(XLAConfig):
         self.rope_base = rope_base
 
         self.z_size = z_size
+        self.z_mlp_mult = z_mlp_mult
 
         super().__init__(*args, **kwargs)
+
+
+class SwiftIO(nn.Module):
+
+    def special_init(self, config: SwiftConfig):
+            
+        self.scale.weight.data.zero_()
+        self.bias.weight.data.zero_()
+        self.filter.weight.data.zero_()
+
+        self.scale.special_inited = True
+        self.bias.special_inited = True
+        self.filter.special_inited = True
+
+
+    def __init__(self, hidden_size):
+
+        super().__init__()
+
+        self.norm = nn.LayerNorm(hidden_size, eps=1e-5, elementwise_affine=False)
+
+        self.scale = nn.Embedding(2, hidden_size)
+        self.bias = nn.Embedding(2, hidden_size)
+        
+        self.filter = nn.Embedding(2, hidden_size)
+    
+
+    def enter(self, x, mask):
+        return (
+            self.bias(mask) + 
+            (1+self.scale(mask)) * self.norm(x)
+        )
+    
+
+    def exit(self, hidden_states, y, mask):
+        return (
+            hidden_states +
+            (1+self.filter(mask)) * y
+        )
 
 
 class SwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
 
-        # conditional io
-        self.enc_scale.weight.data.zero_()
-        self.dec_scale.weight.data.zero_()
-        self.enc_bias.weight.data.zero_()
-        self.dec_bias.weight.data.zero_()
-        self.enc_filter.weight.data.zero_()
-        self.dec_filter.weight.data.zero_()
-
-        self.cross.linear.weight.data.zero_()
-        if self.cross.linear.bias is not None:
-            self.cross.linear.bias.data.zero_()
-
-        self.enc_scale.special_inited = True
-        self.dec_scale.special_inited = True
-        self.enc_bias.special_inited = True
-        self.dec_bias.special_inited = True
-        self.enc_filter.special_inited = True
-        self.dec_filter.special_inited = True
-
-        self.cross.linear.special_inited = True
-
-        # zero init z
+        # most regular init
         self.enc_up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.enc_up.total_in))
         if self.enc_up.linear.bias is not None:
             self.enc_up.linear.bias.data.zero_()
         
-        self.enc_up.linear.weight.data[-2*self.z_size:].zero_()
+        # zero init z bias
+        self.enc_up.linear.weight.data[-(2*self.z_size + 2*self.z_mlp_size):-2*self.z_mlp_size].zero_()
 
         self.enc_up.linear.special_inited = True
+
+        # zero init mlp down
+        self.enc_mlp_down.linear.weight.data.zero_()
+        if self.enc_mlp_down.linear.bias is not None:
+            self.enc_mlp_down.linear.bias.data.zero_()
+        
+        self.enc_mlp_down.linear.special_inited = True
 
 
     def __init__(self, config: SwiftConfig, layer_idx: int):
@@ -122,34 +152,35 @@ class SwiftLayer(nn.Module):
 
         # basic shapes
         self.hidden_size = config.hidden_size
+        self.mlp_size = config.mlp_size
+
         self.z_size = config.z_size
+        self.z_mlp_mult = config.z_mlp_mult
+        self.z_mlp_size = self.z_size * self.z_mlp_mult
+        
+        self.cat_size = self.hidden_size + self.z_size
         self.qkv_size = config.attention_head_size * config.num_attention_heads
 
         # norms
-        self.enc_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
-        self.dec_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=False)
-        
-        # in parameters
-        self.enc_scale = nn.Embedding(2, config.hidden_size)
-        self.dec_scale = nn.Embedding(2, config.hidden_size)
-        self.enc_bias = nn.Embedding(2, config.hidden_size)
-        self.dec_bias = nn.Embedding(2, config.hidden_size)
-
-        # cross parameters
-        self.cross = FusedLinear(
-            config.hidden_size,
-            [config.hidden_size]*2,
-            bias=False
-        )
+        self.enc_io = SwiftIO(config.hidden_size)
+        self.dec_io = SwiftIO(config.hidden_size)
 
         # input projections
         self.enc_up = FusedLinear(
-            config.hidden_size,
-            [3*self.qkv_size] + [config.mlp_size]*2 + [config.z_size]*2,
-            bias=False
+            self.cat_size,
+            [3*self.qkv_size] + [config.mlp_size]*2 + [2*config.z_size] + [self.z_mlp_size]*2,
+            bias=False,
+            mask=self._get_iaf_mask()
         )
+        self.enc_mlp_down = FusedLinear(
+            self.z_mlp_size,
+            2*self.z_size,
+            bias=False,
+            mask=self._get_down_mask()
+        )
+
         self.dec_up = FusedLinear(
-            config.hidden_size,
+            self.cat_size,
             [3*self.qkv_size] + [config.mlp_size]*2,
             bias=False
         )
@@ -180,12 +211,41 @@ class SwiftLayer(nn.Module):
             bias=False
         )
 
-        # output filters
-        self.enc_filter = nn.Embedding(2, config.hidden_size)
-        self.dec_filter = nn.Embedding(2, config.hidden_size)
-
         # z scale
         self.z_scale = np.sqrt(1 / (config.z_size * config.num_layers))
+
+
+    def _get_iaf_mask(self):
+        base_size = 3*self.qkv_size + 2*self.mlp_size
+        inner_size = base_size + 2*self.z_size + 2*self.z_mlp_size
+
+        # hidden states can apply to anything
+        hidden_mask = torch.ones(inner_size, self.hidden_size)
+
+        # noise can apply to base
+        noise_base_mask = torch.ones(base_size, self.z_size)
+
+        # bias is auto-regressive (no diagonal)
+        noise_bias_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        noise_bias_mask = noise_bias_mask.repeat(2, 1)
+
+        # mlp is auto-regressive (with diagonal)
+        noise_mlp_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=0)
+        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.z_mlp_mult, dim=0)
+        noise_mlp_mask = noise_mlp_mask.repeat(2, 1)
+
+        # combine noise masks
+        noise_mask = torch.cat([noise_base_mask, noise_bias_mask, noise_mlp_mask], dim=0)
+
+        # combine all masks
+        return torch.cat([hidden_mask, noise_mask], dim=1)
+
+
+    def _get_down_mask(self):
+        mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        mask = mask.repeat_interleave(self.z_mlp_mult, dim=1)
+        out = mask.repeat(2, 1)
+        return out
 
 
     def forward(
@@ -199,23 +259,32 @@ class SwiftLayer(nn.Module):
         past_key_value=None,
     ):
         float_mask = mask.to(encoder_states.dtype).unsqueeze(-1)
+        noise = noise * float_mask
 
-        # apply conditional cross scaling
-        enc_normed = self.enc_norm(encoder_states)
-        dec_normed = self.dec_norm(decoder_states)
+        # get encoder variables
+        enc_x = torch.cat([self.enc_io.enter(encoder_states, mask), noise], dim=-1)
+        (
+            enc_qkv, enc_gate, enc_val,
+            enc_z_bias,
+            enc_z_gate, enc_z_val
+        ) = self.enc_up(enc_x)
 
-        enc_x = self.enc_bias(mask) + (1+self.enc_scale(mask)) * enc_normed
-        dec_x = self.dec_bias(mask) + (1+self.dec_scale(mask)) * dec_normed
+        # get z
+        enc_mu, enc_log_sigma = (
+            float_mask * self.z_scale * (
+                enc_z_bias +
+                self.enc_mlp_down(self.mlp(enc_z_gate, enc_z_val))
+            )
+        ).chunk(2, dim=-1)
+        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
 
-        enc_x = enc_x + torch.where(
-            mask.bool().unsqueeze(-1),
-            *self.cross(dec_x)
-        )
+        z = enc_mu + enc_sigma * noise
 
-        # get outputs
-        enc_qkv, enc_gate, enc_val, enc_mu, enc_log_sigma = self.enc_up(enc_x)
+        # get decoder variables
+        dec_x = torch.cat([self.dec_io.enter(decoder_states, mask), z], dim=-1)
         dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
 
+        # apply attention
         qkv = torch.cat([enc_qkv, dec_qkv], dim=0)
         enc_attn_out, dec_attn_out = self.attention(
             *qkv.chunk(3, dim=-1),
@@ -224,19 +293,14 @@ class SwiftLayer(nn.Module):
             past_key_value=past_key_value
         ).chunk(2, dim=0)
 
+        # apply mlp
         enc_mlp_out = self.mlp(enc_gate, enc_val)
         dec_mlp_out = self.mlp(dec_gate, dec_val)
 
-        enc_mu = enc_mu * self.z_scale * float_mask
-        enc_log_sigma = enc_log_sigma * self.z_scale * float_mask
+        encoder_states = self.enc_io.exit(encoder_states, self.enc_down(enc_attn_out, enc_mlp_out, z), mask)
+        decoder_states = self.dec_io.exit(decoder_states, self.dec_down(dec_attn_out, dec_mlp_out, z), mask)
 
-        enc_sigma = F.softplus(enc_log_sigma + np.log(np.e - 1))
-
-        z = (enc_mu + enc_sigma * noise) * float_mask
-
-        encoder_states = encoder_states + (1+self.enc_filter(mask)) * self.enc_down(enc_attn_out, enc_mlp_out, z)
-        decoder_states = decoder_states + (1+self.dec_filter(mask)) * self.dec_down(dec_attn_out, dec_mlp_out, z)
-
+        # get kl
         kl = (
             -torch.log(enc_sigma)
             + 0.5 * (enc_sigma**2 + enc_mu**2)

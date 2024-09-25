@@ -66,7 +66,8 @@ class FusedLinear(nn.Module):
         in_feature_list,
         out_feature_list,
         bias=True,
-        contiguous=False
+        contiguous=False,
+        mask=None
     ):
         super().__init__()
 
@@ -85,6 +86,11 @@ class FusedLinear(nn.Module):
 
         self.linear = nn.Linear(self.total_in, self.total_out, bias=bias)
     
+        self.use_mask = mask is not None
+        if self.use_mask:
+            assert mask.shape == self.linear.weight.shape, f'mask shape {mask.shape} does not match weight shape {self.linear.weight.shape}'
+            self.register_buffer('mask', mask)
+
 
     def _error_message(self, inputs):
         raise ValueError(f'expected inputs of size {self.in_feature_list}, got {[v.shape[-1] for v in inputs]}')
@@ -104,7 +110,14 @@ class FusedLinear(nn.Module):
         if in_scale is not None:
             x = x * in_scale
 
-        x = self.linear(x)
+        if self.use_mask:
+            x = F.linear(
+                x,
+                self.linear.weight * self.mask,
+                self.linear.bias
+            )
+        else:
+            x = self.linear(x)
 
         if scale is not None:
             x = x * scale
