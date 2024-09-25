@@ -72,7 +72,7 @@ class XLASwiftTrainer(BaseXLATrainer):
         # current version is raw logit clipping
         kl_clip = self.kl_per_token(kl, mask) > self.kl_threshold
         acc_clip = self.acc(logits, x, mask) > self.acc_threshold
-        clip_mask = mask & (torch.argmax(logits, dim=-1) != x)
+        clip_mask = mask & (log_probs < np.log(0.75))  # (torch.argmax(logits, dim=-1) != x)
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
