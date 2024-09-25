@@ -121,13 +121,14 @@ class SwiftIO(nn.Module):
     def exit(self, hidden_states, y, mask):
         return (
             hidden_states +
-            (1+self.filter(mask)) * y
+            self.filter(mask) * y
         )
 
 
 class SwiftLayer(nn.Module):
 
     def special_init(self, config: SwiftConfig):
+        return
 
         # most regular init
         self.enc_up.linear.weight.data.normal_(0.0, 1/np.sqrt(self.enc_up.total_in))
