@@ -173,7 +173,7 @@ class FullRotaryAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: torch.LongTensor,
+        position_ids=None,
         attention_mask=None,
         past_key_value=None,
     ):
@@ -234,7 +234,7 @@ class RotaryAttention(nn.Module):
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        position_ids: torch.LongTensor,
+        position_ids=None,
         attention_mask=None,
         past_key_value=None,
     ):
