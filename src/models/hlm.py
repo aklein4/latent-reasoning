@@ -10,6 +10,7 @@ from utils.model_utils import (
     RotaryAttention,
     GLU
 )
+import utils.constants as constants
 
 
 class HLmConfig(XLAConfig):
@@ -383,6 +384,8 @@ class HLmModel(XLAModel):
         self.norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        self.gradient_checkpointing = False
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -421,16 +424,29 @@ class HLmModel(XLAModel):
         uncond_kl = 0
         for i, layer in enumerate(self.layers):
 
-            encoder_states, decoder_states, generator_states, kl_out, uncond_kl_out = layer(
-                encoder_states,
-                decoder_states,
-                generator_states,
-                long_mask,
-                noise[:, :, i],
-                encoder_attn_mask,
-                decoder_attn_mask,
-                generator_attn_mask
-            )
+            if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+                encoder_states, decoder_states, generator_states, kl_out, uncond_kl_out = self._gradient_checkpointing_func(
+                    layer.__call__,
+                    encoder_states,
+                    decoder_states,
+                    generator_states,
+                    long_mask,
+                    noise[:, :, i],
+                    encoder_attn_mask,
+                    decoder_attn_mask,
+                    generator_attn_mask
+                )
+            else:
+                encoder_states, decoder_states, generator_states, kl_out, uncond_kl_out = layer(
+                    encoder_states,
+                    decoder_states,
+                    generator_states,
+                    long_mask,
+                    noise[:, :, i],
+                    encoder_attn_mask,
+                    decoder_attn_mask,
+                    generator_attn_mask
+                )
 
             kl = kl + kl_out
             uncond_kl = uncond_kl + uncond_kl_out
