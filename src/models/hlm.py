@@ -339,7 +339,56 @@ class HLmLayer(nn.Module):
         ).sum(-1).sum(-1)
 
         return encoder_states, decoder_states, generator_states, kl, uncond_kl
-        
+    
+
+    def sample(
+        self,
+        decoder_states,
+        generator_states,
+        mask,
+        noise,
+        decoder_attn_mask,
+        generator_attn_mask,
+        cfg_scale=1.0
+    ):
+        float_mask = mask.to(decoder_states.dtype).unsqueeze(-1)
+        noise = noise * float_mask
+
+        # handle generator inputs, get z
+        gen_x = self.gen_io.enter(generator_states, mask)
+        gen_mu = self.gen_z_up(gen_x) * float_mask * self.z_scale
+
+        z = noise + cfg_scale * gen_mu
+
+        gen_qkv, gen_gate, gen_val = self.gen_up(torch.cat([gen_x, z], dim=-1))
+
+        # handle decoder inputs
+        dec_x = torch.cat([self.dec_io.enter(decoder_states), z], dim=-1)
+        dec_qkv, dec_gate, dec_val = self.dec_up(dec_x)
+
+        # apply attention
+        qkv = torch.cat([dec_qkv, gen_qkv], dim=0)
+        attn_mask = torch.cat(
+            [
+                decoder_attn_mask.expand(decoder_states.shape[0], -1, -1, -1),
+                generator_attn_mask.expand(generator_states.shape[0], -1, -1, -1),
+            ],
+            dim=0
+        )
+        dec_attn_out, gen_attn_out = self.attention(
+            *qkv.chunk(3, dim=-1),
+            attention_mask=attn_mask
+        ).chunk(2, dim=0)
+
+        # apply mlp
+        dec_mlp_out = self.mlp(dec_gate, dec_val)
+        gen_mlp_out = self.mlp(gen_gate, gen_val)
+
+        decoder_states = self.dec_io.exit(decoder_states, self.dec_down(dec_attn_out, dec_mlp_out, z))
+        generator_states = self.gen_io.exit(generator_states, self.gen_down(gen_attn_out, gen_mlp_out, z), mask)
+
+        return decoder_states, generator_states
+
 
 class HLmModel(XLAModel):
 
@@ -455,3 +504,52 @@ class HLmModel(XLAModel):
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return lm_logits, kl, uncond_kl
+
+
+    def sample(
+        self,
+        input_ids,
+        mask,
+        noise=None,
+        cfg_scale=1.0
+    ):
+        bs, seq_len = input_ids.shape
+
+        if noise is None:
+            noise = torch.randn(
+                [bs, seq_len, self.num_layers, self.z_size],
+                device=input_ids.device, dtype=self.enc_embs.weight.dtype
+            )
+        long_mask = mask.long()
+
+        decoder_states = self.dec_embs(torch.zeros_like(input_ids))
+        generator_states = torch.where(
+            mask.unsqueeze(-1),
+            self.gen_embs(torch.zeros_like(input_ids)),
+            self.gen_embs(input_ids+1)
+        )
+
+        decoder_attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=encoder_states.dtype)
+        decoder_attn_mask = torch.where(
+            mask.unsqueeze(1).unsqueeze(1), # [bs, 1=head, 1=q, seq_len=k]
+            torch.zeros_like(decoder_attn_mask),
+            torch.full_like(decoder_attn_mask, float('-inf'))
+        )
+        generator_attn_mask = torch.zeros_like(decoder_attn_mask)
+
+        for i, layer in enumerate(self.layers):
+
+            encoder_states, decoder_states, generator_states, kl_out, uncond_kl_out = layer(
+                decoder_states,
+                generator_states,
+                long_mask,
+                noise[:, :, i],
+                decoder_attn_mask,
+                generator_attn_mask,
+                cfg_scale
+            )
+
+
+        lm_logits = self.lm_head(self.norm(decoder_states))
+        return lm_logits.argmax(-1)
+    

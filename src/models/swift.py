@@ -23,6 +23,8 @@ class SwiftConfig(XLAConfig):
             Size of the attention heads in the Transformer encoder
         num_attention_heads (`int`):
             Number of attention heads for each attention layer in the Transformer encoder.
+        num_iaf_attention_heads (`int`):
+            Number of attention heads for the IAF layers in the Transformer encoder.
         num_registers (`int`):
             Number of registers to use in the attention layer.
         num_layers (`int`):
@@ -51,6 +53,7 @@ class SwiftConfig(XLAConfig):
         mlp_size=None,
         attention_head_size=None,
         num_attention_heads=None,
+        num_iaf_attention_heads=None,
         num_registers=None,
         num_layers=None,
         num_decoder_layers=None,
@@ -69,6 +72,7 @@ class SwiftConfig(XLAConfig):
 
         self.attention_head_size = attention_head_size
         self.num_attention_heads = num_attention_heads
+        self.num_iaf_attention_heads = num_iaf_attention_heads
         self.num_registers = num_registers
 
         self.num_layers = num_layers

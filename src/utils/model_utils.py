@@ -14,45 +14,69 @@ from transformers.activations import ACT2FN
 import utils.constants as constants
 
 
-class LinearIAF(nn.Module):
+class GaussianIAF(nn.Module):
 
-    def __init__(self, hidden_size, multiplier):
+    def __init__(self, hidden_size, z_size, mlp_mult, activation):
         super().__init__()
 
         self.hidden_size = hidden_size
-        self.multiplier = multiplier
-        self.inner_size = hidden_size * multiplier
+        self.z_size = z_size
+        self.mlp_mult = mlp_mult
 
-        self.up = nn.Parameter(torch.randn(self.inner_size, hidden_size))
-        self.down = nn.Parameter(torch.randn(hidden_size, self.inner_size))
+        self.cat_size = hidden_size + z_size
+        self.z_mlp_size = mlp_mult * z_size
 
-        up_mask = torch.tril(torch.ones(hidden_size, self.hidden_size), diagonal=0)
-        up_mask = up_mask.repeat_interleave(self.multiplier, dim=0)
-        self.register_buffer('up_mask', up_mask)
+        self.up = FusedLinear(
+            self.cat_size,
+            [2*self.z_size] + [self.z_mlp_size]*2,
+            bias=False,
+            mask=self._get_up_mask()
+        )
+        self.down = FusedLinear(
+            self.z_mlp_size,
+            2*self.z_size,
+            bias=False,
+            mask=self._get_down_mask()
+        )
 
-        down_mask = torch.tril(torch.ones(self.hidden_size, self.hidden_size), diagonal=-1)
-        down_mask = down_mask.repeat_interleave(self.multiplier, dim=1)
-        self.register_buffer('down_mask', down_mask)
-
-        check = torch.ones(hidden_size)
-        check_out = F.linear(check, up_mask)
-        self.up.data = (self.up.data / torch.sqrt(check_out+1e-7).unsqueeze(1)).detach()
-
-        check = torch.ones(self.inner_size)
-        check_out = F.linear(check, down_mask)
-        self.down.data = (self.down.data / torch.sqrt(check_out+1e-7).unsqueeze(1)).detach()
+        self.mlp = GLU(activation)
 
 
-    def forward(self, x, inner_scale, bias):
-        up = F.linear(
-            x,
-            self.up * self.up_mask
-        ) * inner_scale
+    def _get_up_mask(self):
+        full_size = 2*self.z_size + 2*self.z_mlp_size
 
-        return F.linear(
-            up,
-            self.down * self.down_mask,
-        ) + bias
+        # hidden states can apply to anything
+        hidden_mask = torch.ones(full_size, self.hidden_size)
+
+        # bias is auto-regressive (no diagonal)
+        noise_bias_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        noise_bias_mask = noise_bias_mask.repeat(2, 1)
+
+        # mlp is auto-regressive (with diagonal)
+        noise_mlp_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=0)
+        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.z_mlp_mult, dim=0)
+        noise_mlp_mask = noise_mlp_mask.repeat(2, 1)
+
+        # combine noise masks
+        noise_mask = torch.cat([noise_bias_mask, noise_mlp_mask], dim=0)
+
+        # combine all masks
+        return torch.cat([hidden_mask, noise_mask], dim=1)
+
+
+    def _get_down_mask(self):
+        mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        mask = mask.repeat_interleave(self.z_mlp_mult, dim=1)
+        out = mask.repeat(2, 1)
+        return out
+
+
+    def forward(self, hidden_states, noise):
+       z_bias, z_gate, z_val = self.up(
+           hidden_states, noise
+       )
+
+       return z_bias + self.mlp(self.down(z_gate, z_val))
 
 
 class RMSNorm(nn.Module):
