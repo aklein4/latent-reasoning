@@ -529,7 +529,7 @@ class HLmModel(XLAModel):
             self.gen_embs(input_ids+1)
         )
 
-        decoder_attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=encoder_states.dtype)
+        decoder_attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=decoder_states.dtype)
         decoder_attn_mask = torch.where(
             mask.unsqueeze(1).unsqueeze(1), # [bs, 1=head, 1=q, seq_len=k]
             torch.zeros_like(decoder_attn_mask),
@@ -539,7 +539,7 @@ class HLmModel(XLAModel):
 
         for i, layer in enumerate(self.layers):
 
-            encoder_states, decoder_states, generator_states, kl_out, uncond_kl_out = layer(
+            decoder_states, generator_states, kl_out, uncond_kl_out = layer(
                 decoder_states,
                 generator_states,
                 long_mask,
