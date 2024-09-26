@@ -27,7 +27,7 @@ class GaussianIAF(nn.Module):
         self.z_mlp_size = mlp_mult * z_size
 
         self.up = FusedLinear(
-            self.cat_size,
+            [self.hidden_size, self.z_size],
             [2*self.z_size] + [self.z_mlp_size]*2,
             bias=False,
             mask=self._get_up_mask()
@@ -54,7 +54,7 @@ class GaussianIAF(nn.Module):
 
         # mlp is auto-regressive (with diagonal)
         noise_mlp_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=0)
-        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.z_mlp_mult, dim=0)
+        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.mlp_mult, dim=0)
         noise_mlp_mask = noise_mlp_mask.repeat(2, 1)
 
         # combine noise masks
@@ -66,7 +66,7 @@ class GaussianIAF(nn.Module):
 
     def _get_down_mask(self):
         mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
-        mask = mask.repeat_interleave(self.z_mlp_mult, dim=1)
+        mask = mask.repeat_interleave(self.mlp_mult, dim=1)
         out = mask.repeat(2, 1)
         return out
 
@@ -76,7 +76,7 @@ class GaussianIAF(nn.Module):
            hidden_states, noise
        )
 
-       return z_bias + self.mlp(self.down(z_gate, z_val))
+       return z_bias + self.down(self.mlp(z_gate, z_val))
 
 
 class RMSNorm(nn.Module):
@@ -170,16 +170,16 @@ class FullRotaryAttention(nn.Module):
         rope_fraction,
         max_sequence_length,
         rope_base,
-        layer_idx
+        layer_idx,
+        matrix_mask=None,
+        out_size=None
     ):
         super().__init__()
 
         qkv_size = attention_head_size * num_attention_heads
         
-        self.Q = nn.Linear(hidden_size, qkv_size, bias=False)
-        self.K = nn.Linear(hidden_size, qkv_size, bias=False)
-        self.V = nn.Linear(hidden_size, qkv_size, bias=False)
-        self.O = nn.Linear(qkv_size, hidden_size, bias=False)
+        self.QKV = FusedLinear(hidden_size, [qkv_size]*3, bias=False, mask=matrix_mask)
+        self.O = nn.Linear(qkv_size, out_size if out_size is not None else hidden_size, bias=False)
 
         self.attn = RotaryAttention(
             hidden_size,
@@ -201,9 +201,7 @@ class FullRotaryAttention(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-        q = self.Q(hidden_states)
-        k = self.K(hidden_states)
-        v = self.V(hidden_states)
+        q, k, v = self.QKV(hidden_states)
 
         attn_output = self.attn(q, k, v, position_ids, attention_mask, past_key_value)
 
