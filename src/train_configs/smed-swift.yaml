@@ -23,7 +23,7 @@ weight_decay: 0.1
 checkpoint_interval: 5000
 
 kl_w: 1.0
-token_w: 25.0
+token_w: 50.0
 
-kl_threshold: 3.0
+kl_threshold: 5.0
 acc_threshold: 0.99
