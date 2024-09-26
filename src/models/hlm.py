@@ -539,7 +539,7 @@ class HLmModel(XLAModel):
 
         for i, layer in enumerate(self.layers):
 
-            decoder_states, generator_states, kl_out, uncond_kl_out = layer(
+            decoder_states, generator_states = layer.sample(
                 decoder_states,
                 generator_states,
                 long_mask,
