@@ -2,16 +2,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-try:
-    import torch_xla.core.xla_model as xm
-except ImportError:
-    pass
 
 import numpy as np
 
 from transformers.activations import ACT2FN
-
-import utils.constants as constants
 
 
 class GaussianIAF(nn.Module):
@@ -42,6 +36,7 @@ class GaussianIAF(nn.Module):
         self.mlp = GLU(activation)
 
 
+    @torch.no_grad()
     def _get_up_mask(self):
         full_size = 2*self.z_size + 2*self.z_mlp_size
 
@@ -64,6 +59,7 @@ class GaussianIAF(nn.Module):
         return torch.cat([hidden_mask, noise_mask], dim=1)
 
 
+    @torch.no_grad()
     def _get_down_mask(self):
         mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
         mask = mask.repeat_interleave(self.mlp_mult, dim=1)
@@ -71,12 +67,13 @@ class GaussianIAF(nn.Module):
         return out
 
 
-    def forward(self, hidden_states, noise):
-       z_bias, z_gate, z_val = self.up(
-           hidden_states, noise
-       )
+    def forward(self, hidden_states, noise): 
+        z_bias, z_gate, z_val = self.up(
+            hidden_states, noise
+        )
 
-       return z_bias + self.down(self.mlp(z_gate, z_val))
+        # returns concatination of mu and log_sigma
+        return z_bias + self.down(self.mlp(z_gate, z_val))
 
 
 class RMSNorm(nn.Module):
@@ -90,7 +87,6 @@ class FusedLinear(nn.Module):
         in_feature_list,
         out_feature_list,
         bias=True,
-        contiguous=False,
         mask=None
     ):
         super().__init__()
@@ -103,7 +99,6 @@ class FusedLinear(nn.Module):
         self.in_feature_list = in_feature_list
         self.out_feature_list = out_feature_list
         self.bias = bias
-        self.contiguous = contiguous
 
         self.total_in = sum(in_feature_list)
         self.total_out = sum(out_feature_list)
@@ -120,10 +115,11 @@ class FusedLinear(nn.Module):
         raise ValueError(f'expected inputs of size {self.in_feature_list}, got {[v.shape[-1] for v in inputs]}')
 
 
-    def forward(self, *inputs, in_scale=None, scale=None, bias=None):
+    def forward(self, *inputs):
         if len(inputs) != len(self.in_feature_list):
             self._error_message(inputs)
 
+        # configure and check inputs
         if len(self.in_feature_list) > 1:
             x = torch.cat(inputs, dim=-1)
         else:
@@ -131,9 +127,7 @@ class FusedLinear(nn.Module):
         if x.shape[-1] != self.total_in:
             self._error_message(inputs)
 
-        if in_scale is not None:
-            x = x * in_scale
-
+        # apply linear
         if self.use_mask:
             x = F.linear(
                 x,
@@ -143,19 +137,10 @@ class FusedLinear(nn.Module):
         else:
             x = self.linear(x)
 
-        if scale is not None:
-            x = x * scale
-        if bias is not None:
-            x = x + bias
-
+        # configure outputs
         if len(self.out_feature_list) == 1:
             return x
-        
-        out = torch.split(x, self.out_feature_list, dim=-1)
-        if self.contiguous:
-            out = tuple(v.contiguous() for v in out)
-        
-        return out
+        return torch.split(x, self.out_feature_list, dim=-1)
 
 
 class FullRotaryAttention(nn.Module):
@@ -385,12 +370,12 @@ class RotaryEmbedding(nn.Module):
 
 class FullGLU(nn.Module):
 
-    def __init__(self, hidden_size, mlp_size, activation):
+    def __init__(self, hidden_size, mlp_size, activation, out_size=None):
         super().__init__()
 
         self.gate_proj = nn.Linear(hidden_size, mlp_size, bias=False)
         self.up_proj = nn.Linear(hidden_size, mlp_size, bias=False)
-        self.down_proj = nn.Linear(mlp_size, hidden_size, bias=False)
+        self.down_proj = nn.Linear(mlp_size, out_size if out_size is not None else hidden_size, bias=False)
 
         self.glu = GLU(activation)
 

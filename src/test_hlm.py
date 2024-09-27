@@ -21,7 +21,9 @@ def main():
     assert tokenizer.eos_token_id == constants.GPT2_EOS_TOKEN
 
     x = tokenizer(["Hello, my dog is cute", "His dog is cute too", "All dogs are cute"], return_tensors="pt", padding="max_length", max_length=16).input_ids
-    mask = torch.randint_like(x, 2).bool()
+    mask = torch.ones_like(x).bool() # torch.randint_like(x, 2).bool()
+    mask[0, :3] = False
+    mask[1, :8] = False
 
     print("loading model...")
     config = load_model_config(MODEL_CONFIG)

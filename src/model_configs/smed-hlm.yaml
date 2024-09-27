@@ -7,11 +7,12 @@ architectures: [
 max_sequence_length: 1024
 
 hidden_size: 768
-mlp_size: 2048
+mlp_size: 1024 # 2048
 
-attention_head_size: 64
-num_attention_heads: 12
-num_registers: 0
+attention_head_size: 48 # 64
+num_attention_heads: 8 # 12
+num_iaf_attention_heads: 4
+num_registers: 8
 
 num_layers: 24
 
@@ -21,7 +22,7 @@ norm_eps: 0.00001
 rope_fraction: 2
 rope_base: 10000
 
-z_size: 128
+z_size: 64
 z_mlp_mult: 4
 
-gradient_checkpointing: true
+gradient_checkpointing: false
