@@ -179,7 +179,8 @@ class HLmEncoderLayer(nn.Module):
             config.rope_base,
             layer_idx,
             matrix_mask=self._get_matrix_mask(config),
-            out_size=self.hidden_size
+            out_size=self.hidden_size,
+            position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
         self.mlp = FullGLU(
             self.cat_size, config.mlp_size, config.hidden_act, out_size=self.hidden_size
@@ -300,7 +301,8 @@ class HLmDecoderLayer(nn.Module):
             config.rope_fraction,
             config.max_sequence_length,
             config.rope_base,
-            layer_idx
+            layer_idx,
+            position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
         self.mlp = GLU(
             config.hidden_act
@@ -369,7 +371,8 @@ class HLmGeneratorLayer(nn.Module):
             config.rope_fraction,
             config.max_sequence_length,
             config.rope_base,
-            layer_idx
+            layer_idx,
+            position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
         self.mlp = GLU(
             config.hidden_act

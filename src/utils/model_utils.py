@@ -157,7 +157,8 @@ class FullRotaryAttention(nn.Module):
         rope_base,
         layer_idx,
         matrix_mask=None,
-        out_size=None
+        out_size=None,
+        position_scale=1.0
     ):
         super().__init__()
 
@@ -175,7 +176,8 @@ class FullRotaryAttention(nn.Module):
             rope_fraction,
             max_sequence_length,
             rope_base,
-            layer_idx
+            layer_idx,
+            position_scale=position_scale
         )
 
     
@@ -205,7 +207,8 @@ class RotaryAttention(nn.Module):
         rope_fraction,
         max_sequence_length,
         rope_base,
-        layer_idx
+        layer_idx,
+        position_scale=1.0
     ):
         super().__init__()
 
@@ -221,7 +224,8 @@ class RotaryAttention(nn.Module):
             self.rope = RotaryEmbedding(
                 self.head_dim, rope_fraction,
                 max_sequence_length,
-                rope_base
+                rope_base,
+                position_scale=position_scale
             )
         else:
             self.rope = None
@@ -292,7 +296,7 @@ class RotaryAttention(nn.Module):
 
 class RotaryEmbedding(nn.Module):
 
-    def __init__(self, total_dim, frac, max_position_embeddings, base):
+    def __init__(self, total_dim, frac, max_position_embeddings, base, position_scale=1):
         super().__init__()
 
         assert total_dim % frac == 0, f'dimension {total_dim} must be divisible by frac {frac}'
@@ -302,6 +306,7 @@ class RotaryEmbedding(nn.Module):
 
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        self.position_scale = position_scale
 
         # inverse frequencies for rotations
         freq_ar = torch.arange(0, self.dim, 2).float()
@@ -311,7 +316,7 @@ class RotaryEmbedding(nn.Module):
         ) # [D/2]
 
         # only use integer positions, so we cache sin/cos as embeddings
-        pos = torch.arange(0, self.max_position_embeddings).float()
+        pos = torch.arange(0, self.max_position_embeddings).float() * self.position_scale
         freqs = torch.matmul(inv_freq[:, None], pos[None, :]) # [D/2, L]
         freqs = freqs.permute(1, 0) # [L, D/2]
 
