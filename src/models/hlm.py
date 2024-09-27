@@ -172,7 +172,7 @@ class HLmEncoderLayer(nn.Module):
             self.cat_size+self.z_size,
             config.attention_head_size,
             config.num_attention_heads,
-            config.num_registers,
+            8 if (config.num_registers == 0) else config.num_registers,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -210,7 +210,7 @@ class HLmEncoderLayer(nn.Module):
 
 
     @torch.no_grad()
-    def _get_iaf_attn_mask(self, attn_mask):
+    def get_iaf_attn_mask(self, attn_mask):
         # expand the mask to number of heads
         attn_mask = attn_mask.expand(-1, self.num_attn_heads, -1, -1).clone()
 
@@ -251,7 +251,7 @@ class HLmEncoderLayer(nn.Module):
         x = torch.cat([self.attn_io.enter(hidden_states), z, next_noise], dim=-1)
         attn_out = self.attention(
             x,
-            attention_mask=self._get_iaf_attn_mask(attn_mask)
+            attention_mask=attn_mask
         )
         hidden_states = self.attn_io.exit(hidden_states, attn_out)
 
@@ -448,6 +448,7 @@ class HLmEncoder(nn.Module):
             torch.zeros_like(attn_mask),
             torch.full_like(attn_mask, float('-inf'))
         )
+        attn_mask = self.layers[0].get_iaf_attn_mask(attn_mask)
 
         # pad noise for last layer iaf heads
         padded_noise = torch.cat([noise, torch.zeros_like(noise[:, :, -1:])], dim=2)
