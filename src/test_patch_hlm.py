@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-hlm'
+MODEL_CONFIG = 'smed-patch_hlm'
 
 
 def main():

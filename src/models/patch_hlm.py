@@ -286,7 +286,7 @@ class PatchHLmModel(XLAModel):
         if hasattr(module, 'special_init'):
             module.special_init(self.config)
 
-        if isinstance(module, nn.Linear):
+        if isinstance(module, (nn.Linear, nn.Conv1d)):
             module.weight.data.normal_(0.0, 1/np.sqrt(module.weight.shape[1]))
             if module.bias is not None:
                 module.bias.data.zero_()

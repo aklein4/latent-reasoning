@@ -187,7 +187,10 @@ class HLmEncoderLayer(nn.Module):
         )
 
         # z scale
-        self.z_scale = np.sqrt(1 / (config.z_size * config.num_layers))
+        self.z_scale = np.sqrt(
+            (config.patch_size if hasattr(config, 'patch_size') else 1.0) /
+            (config.z_size * config.num_layers)
+        )
 
 
     @torch.no_grad()
@@ -378,7 +381,10 @@ class HLmGeneratorLayer(nn.Module):
             config.hidden_act
         )
 
-        self.z_scale = np.sqrt(1 / (config.z_size * config.num_layers))
+        self.z_scale = np.sqrt(
+            (config.patch_size if hasattr(config, 'patch_size') else 1.0) /
+            (config.z_size * config.num_layers)
+        )
 
 
     def forward(
