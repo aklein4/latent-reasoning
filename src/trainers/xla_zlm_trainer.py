@@ -26,9 +26,9 @@ class XLAZLmTrainer(BaseXLATrainer):
 
         results = DotDict(
             nlogp=loss(logits, x),
-            ppl=ppl(logits, x),
+            # ppl=ppl(logits, x),
             acc=acc(logits, x),
-            pcorr=pcorr(logits, x),
+            # pcorr=pcorr(logits, x),
             kl=kl,
             logit_clip=logit_clip.float(),
             kl_clip=kl_clip.float()
