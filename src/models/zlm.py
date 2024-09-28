@@ -89,28 +89,24 @@ class ZLmLayer(nn.Module):
 
     def __init__(self, config: ZLmConfig, layer_idx: int):
         super().__init__()
+        qkv_size = config.attention_head_size * config.num_attention_heads
 
         # basic shapes
         self.hidden_size = config.hidden_size
-        self.qkv_size = config.attention_head_size * config.num_attention_heads
-        self.mlp_size = config.mlp_size
-        self.z_size = config.z_size // config.num_layers
-        
-        # norm
-        self.io = ReZeroIO(config.hidden_size, config.norm_eps)
+        self.layer_z_size = config.z_size // config.num_layers
 
         # z components
-        self.z_proj = nn.Linear(self.hidden_size, 2*self.z_size, bias=False)
+        self.z_proj = nn.Linear(self.hidden_size, 2*self.layer_z_size, bias=False)
 
         # transformer projections
         self.up = FusedLinear(
-            [self.hidden_size, self.z_size],
-            [self.qkv_size]*3 + [config.mlp_size]*2,
+            [self.hidden_size, self.layer_z_size],
+            [qkv_size]*3 + [config.mlp_size]*2,
             bias=False
         )
         self.down = FusedLinear(
-            [self.z_size, self.qkv_size, config.mlp_size],
-            config.hidden_size,
+            [self.layer_z_size, qkv_size, config.mlp_size],
+            self.hidden_size,
             bias=False
         )
 
@@ -132,15 +128,13 @@ class ZLmLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states,
+        x,
         z=None,
         noise=None,
         attn_mask=None,
     ):
         assert z is not None or noise is not None
         assert z is None or noise is None
-
-        x = self.io.enter(hidden_states)
 
         # get z
         mu, log_sigma = (
@@ -160,9 +154,94 @@ class ZLmLayer(nn.Module):
         )
         mlp_out = self.mlp(mlp_gate, mlp_val)
 
-        hidden_states = self.io.exit(hidden_states, self.down(z, attn_out, mlp_out))
+        y = self.down(z, attn_out, mlp_out)
+
+        return y, z, mu, sigma
+
+
+class ZLmEncoderLayer(ZLmLayer):
+
+    def __init__(self, config: ZLmConfig, layer_idx: int):
+        super().__init__(config, layer_idx)
+        
+        self.io = ReZeroIO(self.hidden_size, config.norm_eps)
+
+
+    def forward(
+        self,
+        hidden_states,
+        z=None,
+        noise=None,
+        attn_mask=None,
+    ):
+
+        x = self.io.enter(hidden_states)
+
+        y, z, mu, sigma = super().forward(
+            x,
+            z=z,
+            noise=noise,
+            attn_mask=attn_mask
+        )
+
+        hidden_states = self.io.exit(hidden_states, y)
 
         return hidden_states, z, mu, sigma
+
+
+class ZLmDecoderLayer(ZLmLayer):
+
+    def __init__(self, config: ZLmConfig, layer_idx: int):
+        super().__init__(config, layer_idx)
+        
+        self.io = ReZeroIO(self.hidden_size, config.norm_eps)
+        self.markov_io = ReZeroIO(self.hidden_size, config.norm_eps)
+
+
+    def forward(
+        self,
+        hidden_states,
+        markov_states,
+        z=None,
+        noise=None,
+        attn_mask=None,
+        markov_mask=None,
+    ):
+
+        # apply conditional io
+        hidden_x = self.io.enter(hidden_states)
+        markov_x = self.markov_io.enter(markov_states)
+
+        # combine everything
+        x = torch.cat([hidden_x, markov_x], dim=0)
+        if z is not None:
+            z = torch.cat([z, z], dim=0)
+        if noise is not None:
+            noise = torch.cat([noise, noise], dim=0)
+        if attn_mask is not None:
+            attn_mask = torch.cat([attn_mask, markov_mask], dim=0)
+
+        # forward pass and seperate
+        y, z, mu, sigma = super().forward(
+            x,
+            z=z,
+            noise=noise,
+            attn_mask=attn_mask
+        )
+        hidden_y, markov_y = y.chunk(2, dim=0)
+        hidden_z, markov_z = z.chunk(2, dim=0)
+        hidden_mu, markov_mu = mu.chunk(2, dim=0)
+        hidden_sigma, markov_sigma = sigma.chunk(2, dim=0)
+
+        hidden_states = self.io.exit(hidden_states, hidden_y)
+        markov_states = self.markov_io.exit(markov_states, markov_y)
+
+        return (
+            hidden_states, markov_states,
+            hidden_z, markov_z,
+            hidden_mu, markov_mu,
+            hidden_sigma, markov_sigma
+        )
 
 
 class ZLmEncoder(nn.Module):
@@ -178,7 +257,7 @@ class ZLmEncoder(nn.Module):
         self.noise_proj = nn.Linear(self.z_size, self.hidden_size, bias=False)
 
         self.layers = nn.ModuleList([
-            ZLmLayer(config, i)
+            ZLmEncoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
@@ -201,7 +280,7 @@ class ZLmEncoder(nn.Module):
             float("-inf"),
             device=input_ids.device, dtype=hidden_states.dtype
         )
-        attn_mask = torch.tril(attn_mask, diagonal=-1)
+        attn_mask = torch.tril(attn_mask, diagonal=-1).detach()
 
         zs = []
         mus = []
@@ -238,12 +317,13 @@ class ZLmDecoder(nn.Module):
         self.z_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
 
         self.layers = nn.ModuleList([
-            ZLmLayer(config, i)
+            ZLmDecoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
         # outputs
         self.norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=True)
+        self.markov_norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
 
@@ -261,34 +341,57 @@ class ZLmDecoder(nn.Module):
         ) / np.sqrt(2)
 
         attn_mask = torch.full(
-            [1, 1, seq_len, seq_len],
+            [bs, 1, seq_len, seq_len],
             float("-inf"),
             device=input_ids.device, dtype=hidden_states.dtype
         )
-        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = torch.triu(attn_mask, diagonal=1).detach()
 
         z_shifted = torch.cat([z[:, 1:], torch.zeros_like(z[:, :1])], dim=1)
 
+        markov_states = hidden_states.clone()
+        markov_mask = (attn_mask.transpose(-2, -1) + attn_mask).detach()
+
         mus = []
         sigmas = []
+        markov_mus = []
+        markov_sigmas = []
         for i, layer in enumerate(self.layers):
             
-            hidden_states, _, mu, sigma = layer(
+            (
+                hidden_states, markov_states,
+                _, __,
+                mu, markov_mu,
+                sigma, markov_sigma
+            ) = layer(
                 hidden_states,
+                markov_states,
                 z=z_shifted[:, :, i],
-                attn_mask=attn_mask
+                attn_mask=attn_mask,
+                markov_mask=markov_mask
             )
 
             mus.append(mu)
             sigmas.append(sigma)
+            markov_mus.append(markov_mu)
+            markov_sigmas.append(markov_sigma)
 
         lm_logits = self.lm_head(self.norm(hidden_states))
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
+        markov_logits = self.lm_head(self.markov_norm(markov_states))
+        markov_logits = F.log_softmax(markov_logits, dim=-1)
+
         mus = torch.stack(mus, dim=2)
         sigmas = torch.stack(sigmas, dim=2)
+        markov_mus = torch.stack(markov_mus, dim=2)
+        markov_sigmas = torch.stack(markov_sigmas, dim=2)
 
-        return lm_logits, mus, sigmas
+        return (
+            lm_logits, markov_logits,
+            mus, sigmas,
+            markov_mus, markov_sigmas
+        )
 
 
 class ZLmModel(XLAModel):
@@ -327,6 +430,14 @@ class ZLmModel(XLAModel):
         self.post_init()
 
 
+    def kl(self, enc_mu, enc_sigma, dec_mu, dec_sigma):
+        return (
+            torch.log(dec_sigma) - torch.log(enc_sigma)
+            + 0.5 * (enc_sigma**2 + (enc_mu-dec_mu)**2) / (dec_sigma**2)
+            - 0.5
+        ).sum(-1).sum(-1)
+
+
     def forward(
         self,
         input_ids,
@@ -340,7 +451,11 @@ class ZLmModel(XLAModel):
         )
 
         z, enc_mu, enc_sigma = self.encoder(input_ids, noise)
-        lm_logits, dec_mu, dec_sigma = self.decoder(input_ids, z)
+        (
+            lm_logits, markov_logits,
+            dec_mu, dec_sigma,
+            markov_mu, markov_sigma
+        ) = self.decoder(input_ids, z)
 
         # we never use the first token
         enc_mu = enc_mu[:, 1:]
@@ -349,14 +464,14 @@ class ZLmModel(XLAModel):
         # we never use the last token
         dec_mu = dec_mu[:, :-1]
         dec_sigma = dec_sigma[:, :-1]
+        markov_mu = markov_mu[:, :-1]
+        markov_sigma = markov_sigma[:, :-1]
 
-        kl = (
-            torch.log(dec_sigma) - torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu-dec_mu)**2) / (dec_sigma**2)
-            - 0.5
-        ).sum(-1).sum(-1)
+        kl = self.kl(enc_mu, enc_sigma, dec_mu, dec_sigma)
+        markov_kl = self.kl(enc_mu, enc_sigma, markov_mu, markov_sigma)
 
         # add a zero to the end for padding
         kl = torch.cat([kl, torch.zeros_like(kl[:, :1])], dim=1)
+        markov_kl = torch.cat([markov_kl, torch.zeros_like(markov_kl[:, :1])], dim=1)
 
-        return lm_logits, kl
+        return lm_logits, markov_logits, kl, markov_kl

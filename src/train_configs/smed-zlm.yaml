@@ -22,5 +22,4 @@ weight_decay: 0.1
 
 checkpoint_interval: 5000
 
-kl_min: 0.1
-kl_max: 10
+markov_w: 0.1

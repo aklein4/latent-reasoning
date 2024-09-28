@@ -26,9 +26,10 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = ZLmModel(ZLmConfig(**config))
 
-    logits, kl = model(x)
+    logits, markov_logits, kl, markov_kl = model(x)
 
     print(kl)
+    print(markov_kl)
 
 
 if __name__ == '__main__':
