@@ -154,9 +154,7 @@ class HLmEncoderLayer(nn.Module):
         self.num_bid_heads = self.num_attn_heads - self.num_iaf_heads
 
         # norms
-        self.z_io = UnconditionalIO(config.hidden_size)
-        self.attn_io = UnconditionalIO(config.hidden_size)
-        self.mlp_io = UnconditionalIO(config.hidden_size)
+        self.io = UnconditionalIO(config.hidden_size)
 
         # z components
         self.z_up = GaussianIAF(

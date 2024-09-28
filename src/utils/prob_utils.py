@@ -5,6 +5,76 @@ import torch.nn.functional as F
 
 import numpy as np
 
+from utils.model_utils import FusedLinear, GLU
+
+
+class GaussianIAF(nn.Module):
+
+    def __init__(self, hidden_size, z_size, mlp_mult, activation):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.z_size = z_size
+        self.mlp_mult = mlp_mult
+
+        self.cat_size = hidden_size + z_size
+        self.z_mlp_size = mlp_mult * z_size
+
+        self.up = FusedLinear(
+            [self.hidden_size, self.z_size],
+            [2*self.z_size] + [self.z_mlp_size]*2,
+            bias=False,
+            mask=self._get_up_mask()
+        )
+        self.down = FusedLinear(
+            self.z_mlp_size,
+            2*self.z_size,
+            bias=False,
+            mask=self._get_down_mask()
+        )
+
+        self.mlp = GLU(activation)
+
+
+    @torch.no_grad()
+    def _get_up_mask(self):
+        full_size = 2*self.z_size + 2*self.z_mlp_size
+
+        # hidden states can apply to anything
+        hidden_mask = torch.ones(full_size, self.hidden_size)
+
+        # bias is auto-regressive (no diagonal)
+        noise_bias_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        noise_bias_mask = noise_bias_mask.repeat(2, 1)
+
+        # mlp is auto-regressive (with diagonal)
+        noise_mlp_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=0)
+        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.mlp_mult, dim=0)
+        noise_mlp_mask = noise_mlp_mask.repeat(2, 1)
+
+        # combine noise masks
+        noise_mask = torch.cat([noise_bias_mask, noise_mlp_mask], dim=0)
+
+        # combine all masks
+        return torch.cat([hidden_mask, noise_mask], dim=1)
+
+
+    @torch.no_grad()
+    def _get_down_mask(self):
+        mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
+        mask = mask.repeat_interleave(self.mlp_mult, dim=1)
+        out = mask.repeat(2, 1)
+        return out
+
+
+    def forward(self, hidden_states, noise): 
+        z_bias, z_gate, z_val = self.up(
+            hidden_states, noise
+        )
+
+        # returns concatination of mu and log_sigma
+        return z_bias + self.down(self.mlp(z_gate, z_val))
+
 
 class PBitModule(nn.Module):
 

@@ -8,78 +8,6 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
-class GaussianIAF(nn.Module):
-
-    def __init__(self, hidden_size, z_size, mlp_mult, activation):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.z_size = z_size
-        self.mlp_mult = mlp_mult
-
-        self.cat_size = hidden_size + z_size
-        self.z_mlp_size = mlp_mult * z_size
-
-        self.up = FusedLinear(
-            [self.hidden_size, self.z_size],
-            [2*self.z_size] + [self.z_mlp_size]*2,
-            bias=False,
-            mask=self._get_up_mask()
-        )
-        self.down = FusedLinear(
-            self.z_mlp_size,
-            2*self.z_size,
-            bias=False,
-            mask=self._get_down_mask()
-        )
-
-        self.mlp = GLU(activation)
-
-
-    @torch.no_grad()
-    def _get_up_mask(self):
-        full_size = 2*self.z_size + 2*self.z_mlp_size
-
-        # hidden states can apply to anything
-        hidden_mask = torch.ones(full_size, self.hidden_size)
-
-        # bias is auto-regressive (no diagonal)
-        noise_bias_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
-        noise_bias_mask = noise_bias_mask.repeat(2, 1)
-
-        # mlp is auto-regressive (with diagonal)
-        noise_mlp_mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=0)
-        noise_mlp_mask = noise_mlp_mask.repeat_interleave(self.mlp_mult, dim=0)
-        noise_mlp_mask = noise_mlp_mask.repeat(2, 1)
-
-        # combine noise masks
-        noise_mask = torch.cat([noise_bias_mask, noise_mlp_mask], dim=0)
-
-        # combine all masks
-        return torch.cat([hidden_mask, noise_mask], dim=1)
-
-
-    @torch.no_grad()
-    def _get_down_mask(self):
-        mask = torch.tril(torch.ones(self.z_size, self.z_size), diagonal=-1)
-        mask = mask.repeat_interleave(self.mlp_mult, dim=1)
-        out = mask.repeat(2, 1)
-        return out
-
-
-    def forward(self, hidden_states, noise): 
-        z_bias, z_gate, z_val = self.up(
-            hidden_states, noise
-        )
-
-        # returns concatination of mu and log_sigma
-        return z_bias + self.down(self.mlp(z_gate, z_val))
-
-
-class RMSNorm(nn.Module):
-    pass
-
-
 class FusedLinear(nn.Module):
 
     def __init__(
@@ -143,58 +71,6 @@ class FusedLinear(nn.Module):
         return torch.split(x, self.out_feature_list, dim=-1)
 
 
-class FullRotaryAttention(nn.Module):
-
-    def __init__(
-        self,
-        hidden_size,
-        attention_head_size,
-        num_attention_heads,
-        num_registers,
-        use_rope,
-        rope_fraction,
-        max_sequence_length,
-        rope_base,
-        layer_idx,
-        matrix_mask=None,
-        out_size=None,
-        position_scale=1.0
-    ):
-        super().__init__()
-
-        qkv_size = attention_head_size * num_attention_heads
-        
-        self.QKV = FusedLinear(hidden_size, [qkv_size]*3, bias=False, mask=matrix_mask)
-        self.O = nn.Linear(qkv_size, out_size if out_size is not None else hidden_size, bias=False)
-
-        self.attn = RotaryAttention(
-            hidden_size,
-            attention_head_size,
-            num_attention_heads,
-            num_registers,
-            use_rope,
-            rope_fraction,
-            max_sequence_length,
-            rope_base,
-            layer_idx,
-            position_scale=position_scale
-        )
-
-    
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids=None,
-        attention_mask=None,
-        past_key_value=None,
-    ):
-        q, k, v = self.QKV(hidden_states)
-
-        attn_output = self.attn(q, k, v, position_ids, attention_mask, past_key_value)
-
-        return self.O(attn_output)
-
-
 class RotaryAttention(nn.Module):
 
     def __init__(
@@ -249,7 +125,6 @@ class RotaryAttention(nn.Module):
         attention_mask=None,
         past_key_value=None,
     ):
-
         # get shapes
         bsz, q_len, _ = query_states.shape
 
@@ -279,7 +154,7 @@ class RotaryAttention(nn.Module):
                     dim=-1
                 )
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3) / np.sqrt(self.head_dim))
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / np.sqrt(self.head_dim)
         if attention_mask is not None:
             attn_weights = attn_weights + attention_mask
 
@@ -371,25 +246,6 @@ class RotaryEmbedding(nn.Module):
         k = torch.cat((k_rot, k_no_rot), dim=-1)
 
         return q, k
-
-
-class FullGLU(nn.Module):
-
-    def __init__(self, hidden_size, mlp_size, activation, out_size=None):
-        super().__init__()
-
-        self.gate_proj = nn.Linear(hidden_size, mlp_size, bias=False)
-        self.up_proj = nn.Linear(hidden_size, mlp_size, bias=False)
-        self.down_proj = nn.Linear(mlp_size, out_size if out_size is not None else hidden_size, bias=False)
-
-        self.glu = GLU(activation)
-
-
-    def forward(self, x):
-        gate = self.gate_proj(x)
-        up = self.up_proj(x)
-
-        return self.down_proj(self.glu(gate, up))
 
 
 class GLU(nn.Module):
