@@ -53,7 +53,6 @@ def loss(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None,
     shift=True
 ) -> torch.Tensor:
     """ Standard cross-entropy loss for language modeling.
@@ -69,23 +68,20 @@ def loss(
         torch.Tensor: cross-entropy loss [nats]
     """
     if shift:
-        x = x[:, 1:].view(-1)
-        logits = logits[:, :-1].view(-1, logits.shape[-1])
-    else:
-        x = x.view(-1)
-        logits = logits.view(-1, logits.shape[-1])
+        x = x[:, 1:]
+        logits = logits[:, :-1]
+    x = x.view(-1)
+    logits = logits.view(-1, logits.shape[-1])
     
-    mask = x != ignore_index
-    if extra_mask is not None:
-        mask = mask & extra_mask.view(-1)
+    mask = x == ignore_index
 
     # we assume logits are normalized, to save (quite a bit of) memory
     ar = torch.arange(x.shape[0], device=x.device, dtype=x.dtype)
     loss = -logits[ar, x]
 
     # mask padding tokens
-    loss = torch.masked_fill(loss, ~mask, 0.0)
-    return loss.sum() / mask.float().sum()
+    loss = torch.masked_fill(loss, mask, 0.0)
+    return loss.mean()
 
 
 @torch.no_grad()
@@ -93,7 +89,6 @@ def ppl(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None,
     shift=True
 ) -> torch.Tensor:
     """ Compute perplexity of the model.
@@ -110,13 +105,8 @@ def ppl(
     if shift:
         x = x[:, 1:]
         logits = logits[:, :-1]
-    else:
-        x = x
-        logits = logits
 
-    mask = x != ignore_index
-    if extra_mask is not None:
-        mask = mask & extra_mask
+    mask = x == ignore_index
 
     logp = -F.cross_entropy(
         logits.contiguous().view(-1, logits.shape[-1]),
@@ -124,8 +114,8 @@ def ppl(
         reduction='none'
     ).view(x.shape)
 
-    logp = torch.masked_fill(logp, ~mask, 0.0)
-    logp_seq = logp.sum(-1) / (mask).float().sum(-1)
+    logp = torch.masked_fill(logp, mask, 0.0)
+    logp_seq = logp.sum(-1) / (~mask).float().sum(-1)
 
     return torch.exp(-logp_seq).mean()
 
@@ -135,7 +125,6 @@ def acc(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None,
     shift=True
 ) -> torch.Tensor:
     """ Compute top-1 next-token accuracy of the model.
@@ -151,18 +140,15 @@ def acc(
     """
     if shift:
         x, logits = x[:, 1:], logits[:, :-1]
-    else:
-        x, logits = x, logits
 
-    mask = x != ignore_index
-    if extra_mask is not None:
-        mask = mask & extra_mask
+    mask = x == ignore_index
 
     corr = torch.logical_and(
         logits.argmax(-1) == x,
-        mask
+        ~mask
     ).float().sum()
-    return corr / (mask).float().sum()
+
+    return corr / (~mask).float().sum()
 
 
 @torch.no_grad()
@@ -170,7 +156,6 @@ def pcorr(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    extra_mask=None,
     shift=True
 ) -> torch.Tensor:
     """ Compute token prediction probability of the model.
@@ -186,15 +171,12 @@ def pcorr(
         torch.Tensor: next-token prediction probability
     """
     if shift:
-        x = x[:, 1:].contiguous().view(-1)
-        logits = logits[:, :-1].contiguous().view(-1, logits.shape[-1])
-    else:
-        x = x.contiguous().view(-1)
-        logits = logits.contiguous().view(-1, logits.shape[-1])
+        x = x[:, 1:]
+        logits = logits[:, :-1]
+    x = x.contiguous().view(-1)
+    logits = logits.contiguous().view(-1, logits.shape[-1])
 
-    mask = x != ignore_index
-    if extra_mask is not None:
-        mask = mask & extra_mask.view(-1)
+    mask = x == ignore_index
 
     logp = -F.cross_entropy(
         logits, x,
@@ -202,5 +184,5 @@ def pcorr(
     )
     p = torch.exp(logp)
 
-    p = torch.masked_fill(p, ~mask, 0.0)
-    return p.sum() / (mask).float().sum()
+    p = torch.masked_fill(p, mask, 0.0)
+    return p.sum() / (~mask).float().sum()

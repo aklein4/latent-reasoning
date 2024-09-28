@@ -8,6 +8,20 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
+class ReZeroIO(nn.Module):
+
+    def __init__(self, hidden_size, eps=1e-5):
+        super().__init__()
+        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
+        self.filter = nn.Parameter(torch.zeros(1, 1, hidden_size))
+
+    def enter(self, x):
+        return self.norm(x)
+    
+    def exit(self, hidden_states, y):
+        return hidden_states + self.filter * y
+
+
 class FusedLinear(nn.Module):
 
     def __init__(
@@ -75,7 +89,6 @@ class RotaryAttention(nn.Module):
 
     def __init__(
         self,
-        hidden_size,
         attention_head_size,
         num_attention_heads,
         num_registers,
@@ -90,7 +103,6 @@ class RotaryAttention(nn.Module):
 
         self.layer_idx = layer_idx
 
-        self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
         self.head_dim = attention_head_size
         self.total_dim = self.num_heads * self.head_dim
