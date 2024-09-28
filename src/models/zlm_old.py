@@ -85,7 +85,137 @@ class ZLmConfig(XLAConfig):
         super().__init__(*args, **kwargs)
 
 
-class ZLmLayer(nn.Module):
+class ZLmEncoderLayer(nn.Module):
+
+    def __init__(self, config: ZLmConfig, layer_idx: int):
+        super().__init__()
+
+        # basic shapes
+        self.hidden_size = config.hidden_size
+        self.qkv_size = config.attention_head_size * config.num_attention_heads
+        self.mlp_size = config.mlp_size
+        self.z_size = config.z_size // config.num_layers
+        
+        # attention shapes
+        self.num_attn_heads = config.num_attention_heads
+        self.num_iaf_heads = config.num_iaf_attention_heads
+        self.num_bid_heads = self.num_attn_heads - self.num_iaf_heads
+
+        # norms
+        self.io = ReZeroIO(config.hidden_size, config.norm_eps)
+
+        # z components
+        self.z_proj = nn.Linear(self.hidden_size, 2*self.z_size, bias=False)
+
+        # attention components, input order: hidden, z, next_noise
+        self.attn_proj = FusedLinear(
+            [self.hidden_size, self.z_size, self.z_size],
+            [self.qkv_size]*3,
+            bias=False,
+            mask=self._get_qkv_matrix_mask(config)
+        )
+        self.attention = RotaryAttention(
+            config.attention_head_size,
+            config.num_attention_heads,
+            8 if (config.num_registers == 0) else config.num_registers,
+            True,
+            config.rope_fraction,
+            config.max_sequence_length,
+            config.rope_base,
+            layer_idx,
+        )
+
+        # mlp components, input order: hidden, z, attn
+        self.mlp_proj = FusedLinear(
+            [self.hidden_size, self.z_size, self.qkv_size],
+            [self.mlp_size]*2,
+            bias=False
+        )
+        self.mlp = GLU(config.hidden_act)
+
+        # output components, input order: z, attn, mlp
+        self.down_proj = FusedLinear(
+            [self.z_size, self.qkv_size, self.mlp_size],
+            self.hidden_size,
+            bias=False
+        )
+
+        # z scale
+        self.z_scale = np.sqrt(1 / config.z_size)
+
+
+    @torch.no_grad()
+    def _get_qkv_matrix_mask(self, config: ZLmConfig):
+        
+        # hidden states and can apply to anything
+        hidden_mask = torch.ones(3*self.qkv_size, self.hidden_size)
+        z_mask = torch.ones(3*self.qkv_size, self.z_size)
+
+        # noise can ONLY apply to iaf heads k and v
+        noise_q_mask = torch.zeros(self.qkv_size, self.z_size)
+        
+        noise_iaf_mask = torch.ones(self.num_iaf_heads*config.attention_head_size, self.z_size)
+        noise_bid_mask = torch.zeros(self.num_bid_heads*config.attention_head_size, self.z_size)
+        noise_kv_mask = torch.cat([noise_iaf_mask, noise_bid_mask], dim=0)
+        noise_kv_mask = noise_kv_mask.repeat(2, 1)
+
+        noise_mask = torch.cat([noise_q_mask, noise_kv_mask], dim=0)
+
+        return torch.cat([hidden_mask, z_mask, noise_mask], dim=1)
+
+
+    @torch.no_grad()
+    def get_iaf_attn_mask(self, attn_mask):
+        # expand the mask to number of heads
+        attn_mask = attn_mask.expand(-1, self.num_attn_heads, -1, -1).clone()
+
+        # iaf heads can not attend to themselves
+        iaf_mask = torch.full_like(attn_mask, float('-inf'))
+        attn_mask[:, :self.num_iaf_heads] += torch.triu(iaf_mask[:, :self.num_iaf_heads], diagonal=0)
+
+        return attn_mask
+        
+
+    def forward(
+        self,
+        hidden_states,
+        noise,
+        next_noise,
+        attn_mask
+    ):
+
+        x = self.io.enter(hidden_states)
+
+        # get z
+        mu, log_sigma = (
+            self.z_scale *
+            self.z_proj(x)
+        ).chunk(2, dim=-1)
+        sigma = F.softplus(log_sigma + np.log(np.e - 1))
+
+        z = mu + sigma * noise
+
+        # get attn
+        attn_out = self.attention(
+            *self.attn_proj(x, z, next_noise),
+            attention_mask=attn_mask
+        )
+
+        # get mlp
+        mlp_out = self.mlp(
+            *self.mlp_proj(x, z, attn_out)
+        )
+
+        # add to residual stream
+        hidden_states = self.io.exit(
+            hidden_states,
+            self.down_proj(z, attn_out, mlp_out)
+        )
+
+        return hidden_states, z, mu, sigma
+    
+
+class ZLmDecoderLayer(nn.Module):
 
     def __init__(self, config: ZLmConfig, layer_idx: int):
         super().__init__()
@@ -162,7 +292,7 @@ class ZLmLayer(nn.Module):
 
         hidden_states = self.io.exit(hidden_states, self.down(z, attn_out, mlp_out))
 
-        return hidden_states, z, mu, sigma
+        return hidden_states, mu, sigma
 
 
 class ZLmEncoder(nn.Module):
@@ -175,10 +305,9 @@ class ZLmEncoder(nn.Module):
         self.layer_z_size = config.z_size // config.num_layers
 
         self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.noise_proj = nn.Linear(self.z_size, self.hidden_size, bias=False)
 
         self.layers = nn.ModuleList([
-            ZLmLayer(config, i)
+            ZLmEncoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
@@ -191,17 +320,13 @@ class ZLmEncoder(nn.Module):
         bs, seq_len = input_ids.shape
         
         hidden_states = self.embs(input_ids)
-        hidden_states[:, :-1] = (
-            hidden_states[:, :-1] +
-            self.noise_proj(noise.view(bs, seq_len, self.z_size)[:, 1:])
-        ) / np.sqrt(2)
+        
+        # mask out conditionals
+        attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=hidden_states.dtype)
+        attn_mask = self.layers[0].get_iaf_attn_mask(attn_mask)
 
-        attn_mask = torch.full(
-            [1, 1, seq_len, seq_len],
-            float("-inf"),
-            device=input_ids.device, dtype=hidden_states.dtype
-        )
-        attn_mask = torch.tril(attn_mask, diagonal=-1)
+        # pad noise for last layer iaf heads
+        padded_noise = torch.cat([noise, torch.zeros_like(noise[:, :, -1:])], dim=2)
 
         zs = []
         mus = []
@@ -210,8 +335,9 @@ class ZLmEncoder(nn.Module):
             
             hidden_states, z, mu, sigma = layer(
                 hidden_states,
-                noise=noise[:, :, i],
-                attn_mask=attn_mask
+                noise[:, :, i],
+                padded_noise[:, :, i+1],
+                attn_mask
             )
 
             zs.append(z)
@@ -235,10 +361,10 @@ class ZLmDecoder(nn.Module):
         self.layer_z_size = config.z_size // config.num_layers
 
         self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.z_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
+        self.z_in_proj = nn.Linear(config.z_size, config.hidden_size, bias=False)
 
         self.layers = nn.ModuleList([
-            ZLmLayer(config, i)
+            ZLmDecoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
@@ -257,26 +383,16 @@ class ZLmDecoder(nn.Module):
         hidden_states = self.embs(input_ids)
         hidden_states[:, 1:] = (
             hidden_states[:, 1:] +
-            self.z_proj(z.view(bs, seq_len, self.z_size)[:, 1:])
+            self.z_in_proj(z.view(bs, seq_len, self.z_size))[:, :-1]
         ) / np.sqrt(2)
-
-        attn_mask = torch.full(
-            [1, 1, seq_len, seq_len],
-            float("-inf"),
-            device=input_ids.device, dtype=hidden_states.dtype
-        )
-        attn_mask = torch.triu(attn_mask, diagonal=1)
-
-        z_shifted = torch.cat([z[:, 1:], torch.zeros_like(z[:, :1])], dim=1)
 
         mus = []
         sigmas = []
         for i, layer in enumerate(self.layers):
             
-            hidden_states, _, mu, sigma = layer(
+            hidden_states, mu, sigma = layer(
                 hidden_states,
-                z=z_shifted[:, :, i],
-                attn_mask=attn_mask
+                z=z[:, :, i],
             )
 
             mus.append(mu)
@@ -342,21 +458,10 @@ class ZLmModel(XLAModel):
         z, enc_mu, enc_sigma = self.encoder(input_ids, noise)
         lm_logits, dec_mu, dec_sigma = self.decoder(input_ids, z)
 
-        # we never use the first token
-        enc_mu = enc_mu[:, 1:]
-        enc_sigma = enc_sigma[:, 1:]
-
-        # we never use the last token
-        dec_mu = dec_mu[:, :-1]
-        dec_sigma = dec_sigma[:, :-1]
-
         kl = (
             torch.log(dec_sigma) - torch.log(enc_sigma)
             + 0.5 * (enc_sigma**2 + (enc_mu-dec_mu)**2) / (dec_sigma**2)
             - 0.5
         ).sum(-1).sum(-1)
-
-        # add a zero to the end for padding
-        kl = torch.cat([kl, torch.zeros_like(kl[:, :1])], dim=1)
 
         return lm_logits, kl
