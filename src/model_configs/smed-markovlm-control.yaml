@@ -4,16 +4,16 @@ architectures: [
     MarkovLmModel
 ]
 
-max_sequence_length: 16
+max_sequence_length: 1024
 
-hidden_size: 128
-mlp_size: 256
+hidden_size: 768
+mlp_size: 2048
 
-attention_head_size: 32
-num_attention_heads: 3
+attention_head_size: 64
+num_attention_heads: 12
 num_registers: 0
 
-num_layers: 4
+num_layers: 24
 
 hidden_act: silu
 norm_eps: 0.00001
@@ -21,7 +21,7 @@ norm_eps: 0.00001
 rope_fraction: 2
 rope_base: 10000
 
-z_size: 44
+z_size: 1536
 
 control: true
 

@@ -56,6 +56,7 @@ class MarkovLmConfig(XLAConfig):
         rope_fraction=None,
         rope_base=None,
         z_size=None,
+        control=False,
         *args,
         **kwargs,
     ):
@@ -77,6 +78,8 @@ class MarkovLmConfig(XLAConfig):
 
         self.z_size = z_size
         assert z_size % num_layers == 0, f"z_size ({z_size}) must be divisible by num_layers ({num_layers})"
+
+        self.control = control
 
         super().__init__(*args, **kwargs)
 
@@ -238,6 +241,8 @@ class MarkovLmEncoder(nn.Module):
             for i in range(config.num_layers)
         ])
 
+        self.control = config.control
+
     
     def forward(
         self,
@@ -247,10 +252,11 @@ class MarkovLmEncoder(nn.Module):
         bs, seq_len = input_ids.shape
         
         hidden_states = self.embs(input_ids)
-        hidden_states[:, :-1] = (
-            hidden_states[:, :-1] +
-            self.noise_proj(noise.view(bs, seq_len, self.z_size)[:, 1:])
-        ) / np.sqrt(2)
+        if not self.control:
+            hidden_states[:, :-1] = (
+                hidden_states[:, :-1] +
+                self.noise_proj(noise.view(bs, seq_len, self.z_size)[:, 1:])
+            ) / np.sqrt(2)
 
         attn_mask = torch.full(
             [1, 1, seq_len, seq_len],
@@ -258,6 +264,8 @@ class MarkovLmEncoder(nn.Module):
             device=input_ids.device, dtype=hidden_states.dtype
         )
         attn_mask = torch.tril(attn_mask, diagonal=-1).detach()
+        if self.control:
+            attn_mask = attn_mask.transpose(-1, -2) + attn_mask
 
         zs = []
         mus = []
