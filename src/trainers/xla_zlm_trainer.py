@@ -14,27 +14,27 @@ from utils.training_utils import (
 class XLAZLmTrainer(BaseXLATrainer):
 
     def train_step(self, step, model, x):
+        kl_min = self.anneal_max * max(0, 1 - step/self.anneal_steps)
 
-        logits, markov_logits, kl, markov_kl = model(x)
+        logits, kl = model(x)
         
         # shift kl
         kl = kl[:, :-1].mean()
-        markov_kl = markov_kl[:, :-1].mean()
+        kl_clip = kl < kl_min
 
         results = DotDict(
             nlogp=loss(logits, x),
             acc=acc(logits, x),
             pcorr=pcorr(logits, x),
-            markov_nlogp=loss(markov_logits, x),
-            markov_acc=acc(markov_logits, x),
-            markov_pcorr=pcorr(markov_logits, x),
             kl=kl,
-            markov_kl=markov_kl,
+            kl_min=torch.full_like(kl, kl_min),
+            kl_clip=kl_clip.float()
         )
 
-        results.elbo = results.nlogp + kl
-        results.markov_elbo = results.markov_nlogp + markov_kl
-
-        results.loss = results.elbo + self.markov_w * results.markov_elbo
+        results.nelbo = results.nlogp + kl
+        results.loss = (
+            results.nlogp +
+            torch.where(kl_clip, kl.detach(), kl)
+        )
 
         return results
