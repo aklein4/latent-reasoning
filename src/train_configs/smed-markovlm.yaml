@@ -1,4 +1,4 @@
-trainer_type: XLAZLmTrainer
+trainer_type: XLAMarkovLmTrainer
 
 collator_type: simple
 dataset: fw-45b
