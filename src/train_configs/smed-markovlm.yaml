@@ -21,3 +21,6 @@ eps: 0.00000001
 weight_decay: 0.1
 
 checkpoint_interval: 5000
+
+clip_prob: 0.75
+token_w: 50

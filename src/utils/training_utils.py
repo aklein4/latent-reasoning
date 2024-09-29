@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+
 
 def log_prob(
     logits: torch.Tensor,
@@ -53,7 +55,8 @@ def loss(
     logits: torch.Tensor,
     x: torch.LongTensor,
     ignore_index: Optional[int]=-1,
-    shift=True
+    shift=True,
+    clip=None
 ) -> torch.Tensor:
     """ Standard cross-entropy loss for language modeling.
      - applies offset so that logits_{t} predicts x_{t+1}
@@ -78,6 +81,13 @@ def loss(
     # we assume logits are normalized, to save (quite a bit of) memory
     ar = torch.arange(x.shape[0], device=x.device, dtype=x.dtype)
     loss = -logits[ar, x]
+
+    if clip is not None:
+        loss = torch.where(
+            loss < (-np.log(clip)),
+            loss.detach(),
+            loss
+        )
 
     # mask padding tokens
     loss = torch.masked_fill(loss, mask, 0.0)

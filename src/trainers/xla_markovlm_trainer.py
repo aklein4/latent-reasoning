@@ -21,13 +21,13 @@ class XLAMarkovLmTrainer(BaseXLATrainer):
         kl = kl[:, :-1].mean()
 
         results = DotDict(
-            nlogp=loss(logits, x),
+            nlogp=loss(logits, x, clip=self.clip_prob),
             acc=acc(logits, x),
             pcorr=pcorr(logits, x),
             kl=kl,
         )
 
         results.elbo = results.nlogp + kl
-        results.loss = results.elbo
+        results.loss = self.token_w * results.nlogp + kl
 
         return results
