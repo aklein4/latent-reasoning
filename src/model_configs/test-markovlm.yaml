@@ -1,0 +1,26 @@
+
+model_type: markovlm
+architectures: [
+    MarkovLmModel
+]
+
+max_sequence_length: 16
+
+hidden_size: 128
+mlp_size: 256
+
+attention_head_size: 32
+num_attention_heads: 3
+num_registers: 0
+
+num_layers: 4
+
+hidden_act: silu
+norm_eps: 0.00001
+
+rope_fraction: 2
+rope_base: 10000
+
+z_size: 44
+
+gradient_checkpointing: false
