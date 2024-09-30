@@ -25,5 +25,6 @@ rope_base: 10000
 
 z_size: 384
 z_mlp_mult: 2
+z_output_layers: 2
 
 gradient_checkpointing: true
