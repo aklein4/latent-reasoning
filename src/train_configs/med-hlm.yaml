@@ -4,7 +4,7 @@ collator_type: seq2seq
 dataset: fw-45b
 stream_dataset: true
 
-sequence_length: 1024
+sequence_length: 256
 
 bs: 4096
 mini_bs: 32
@@ -13,8 +13,8 @@ warmup_steps: 2000
 lr_steps: 20000
 checkpoint_interval: 5000
 
-start_lr: 0.0005
-end_lr: 0.00005
+start_lr: 0.00025
+end_lr: 0.000025
 
 optimizer_kwargs:
     beta1: 0.9
@@ -32,4 +32,4 @@ kl_threshold: 10.0
 
 clip_prob: 0.75
 
-num_uncond: 6
+num_uncond: 4
