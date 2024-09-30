@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-patch_hlm'
+MODEL_CONFIG = 'med-patch_hlm'
 
 
 def main():
@@ -27,7 +27,9 @@ def main():
 
     print("loading model...")
     config = load_model_config(MODEL_CONFIG)
-    model = PatchHLmModel(PatchHLmConfig(**config))
+    model = PatchHLmModel(PatchHLmConfig(**config), fast_start=True)
+
+    print(sum([p.numel() for p in model.parameters()]))
 
     logits, kl, uncond_kl = model(x, mask, num_uncond=1)
 
