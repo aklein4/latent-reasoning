@@ -7,7 +7,7 @@ import numpy as np
 from models.xla import XLAModel
 from models.hlm import (
     HLmConfig,
-    HLmEncGen,
+    # HLmEncGen,
     HLmDecoder,
 )
 import utils.constants as constants
@@ -72,22 +72,18 @@ class PatchLmHead(nn.Module):
 
         hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states.view(-1, self.hidden_size, 1)
-        if constants.XLA_AVAILABLE:
-            hidden_states = hidden_states.to(torch.bfloat16)
 
         lm_logits = self.lm_head(hidden_states)
         lm_logits = lm_logits.view(bs, seq_len*self.patch_size, self.vocab_size)
 
-        out = F.log_softmax(
+        return F.log_softmax(
             lm_logits,
             dim=-1,
             dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
         )
 
-        return out
 
-
-class PatchHLmEncGen(HLmEncGen):
+class PatchHLmEncGen:
 
     def init_input_params(self, config: PatchHLmConfig):
         self.patch_size = config.patch_size
