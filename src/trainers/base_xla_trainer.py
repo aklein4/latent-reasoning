@@ -116,6 +116,10 @@ class BaseXLATrainer:
 
 
     def get_optimizer(self, model):
+        return syncfree.AdamW(
+            model.parameters(), lr=self.start_lr,
+            weight_decay=self.optimizer_kwargs["weight_decay"],
+        )
         return LowPrecisionAdafactor(
             model.parameters(), lr=self.start_lr,
             low_precision=self.low_precision_optimizer,
