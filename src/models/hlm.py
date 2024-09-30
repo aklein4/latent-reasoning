@@ -598,7 +598,7 @@ class HLmDecoder(nn.Module):
 
         self.layers = nn.ModuleList([
             HLmDecoderLayer(config, i)
-            for i in range(config.num_layers)
+            for i in range(self.num_layers)
         ])
 
         self.lm_head = self.lm_head_type(config)

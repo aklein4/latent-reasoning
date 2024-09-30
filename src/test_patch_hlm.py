@@ -29,7 +29,9 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = PatchHLmModel(PatchHLmConfig(**config), fast_start=True)
 
-    print(sum([p.numel() for p in model.parameters()]))
+    for name, module in model.enc_gen.layers[0].named_modules():
+        print(f"{name}: {sum([p.numel() for p in module.parameters()]):_}")
+    exit()
 
     logits, kl, uncond_kl = model(x, mask, num_uncond=1)
 
