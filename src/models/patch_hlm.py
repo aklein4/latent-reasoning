@@ -7,8 +7,8 @@ import numpy as np
 from models.xla import XLAModel
 from models.hlm import (
     HLmConfig,
-    HLmEncGenLayer,
-    HLmDecoderLayer,
+    HLmEncGen,
+    HLmDecoder,
 )
 
 
@@ -33,151 +33,95 @@ class PatchHLmConfig(HLmConfig):
         super().__init__(*args, **kwargs)
 
 
-class PatchHLmEncoder(nn.Module):
+class PatchLmHead(nn.Module):
+
+    def special_init(self, config: PatchHLmConfig):
+
+        self.lm_head.weight.data.normal_(
+            0.0,
+            1/np.sqrt(config.hidden_size // config.patch_size)
+        )
+        if self.lm_head.bias is not None:
+            self.lm_head.bias.data.zero_()
+        
+        self.lm_head.special_inited = True
+
 
     def __init__(self, config: PatchHLmConfig):
         super().__init__()
-
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-        self.num_layers = config.num_layers
-        self.patch_size = config.patch_size
-
-        self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.patch_proj = nn.Conv1d(
-            self.patch_size*config.hidden_size,
-            config.hidden_size,
-            kernel_size=1,
-            groups=self.patch_size,
-            bias=False
-        )
-
-        self.layers = nn.ModuleList([
-            HLmEncoderLayer(config, i)
-            for i in range(config.num_layers)
-        ])
-
-    
-    def forward(
-        self,
-        input_ids,
-        mask,
-        noise
-    ):
-        bs, seq_len, _ = input_ids.shape
-        long_mask = mask.long()
         
-        hidden_states = self.embs(input_ids).view(bs*seq_len, self.patch_size*self.hidden_size, 1)
-        hidden_states = self.patch_proj(hidden_states).view(bs, seq_len, self.hidden_size)
-
-        # mask out conditionals
-        attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=hidden_states.dtype)
-        attn_mask = torch.where(
-            mask.unsqueeze(1).unsqueeze(1), # [bs, 1=head, 1=q, seq_len=k]
-            torch.zeros_like(attn_mask),
-            torch.full_like(attn_mask, float('-inf'))
-        )
-        attn_mask = self.layers[0].get_iaf_attn_mask(attn_mask)
-
-        # pad noise for last layer iaf heads
-        padded_noise = torch.cat([noise, torch.zeros_like(noise[:, :, -1:])], dim=2)
-
-        zs = []
-        mus = []
-        sigmas = []
-        for i, layer in enumerate(self.layers):
-            
-            hidden_states, z, mu, sigma = layer(
-                hidden_states,
-                long_mask,
-                noise[:, :, i],
-                padded_noise[:, :, i+1],
-                attn_mask
-            )
-
-            zs.append(z)
-            mus.append(mu)
-            sigmas.append(sigma)
-        
-        return (
-            torch.stack(zs, dim=2),
-            torch.stack(mus, dim=2),
-            torch.stack(sigmas, dim=2)
-        )
-
-
-class PatchHLmDecoder(nn.Module):
-
-    def __init__(self, config: PatchHLmConfig):
-        super().__init__()
-
         self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
-        self.num_layers = config.num_layers
         self.patch_size = config.patch_size
+        assert self.hidden_size % self.patch_size == 0
 
-        self.embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
-        self.patch_proj = nn.Conv1d(
-            self.patch_size*config.hidden_size,
-            config.hidden_size,
-            kernel_size=1,
-            groups=self.patch_size,
-            bias=False
-        )
-
-        self.layers = nn.ModuleList([
-            HLmDecoderLayer(config, i)
-            for i in range(config.num_layers)
-        ])
-
-        self.norm = nn.LayerNorm(config.hidden_size, config.norm_eps, elementwise_affine=True)
+        self.vocab_size = config.vocab_size
+        
+        self.norm = nn.LayerNorm(self.hidden_size, eps=config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Conv1d(
-            config.hidden_size,
-            self.patch_size*config.vocab_size,
+            self.hidden_size,
+            self.patch_size*self.vocab_size,
             kernel_size=1,
             groups=self.patch_size,
             bias=False
         )
 
 
-    def forward(
-        self,
-        input_ids,
-        mask,
-        z,
-    ):
-        bs, seq_len, _ = input_ids.shape
-        long_mask = mask.long()
+    def forward(self, hidden_states):
+        bs, seq_len = hidden_states.shape[:2]
+
+        hidden_states = self.norm(hidden_states)
+        hidden_states = hidden_states.view(-1, self.hidden_size, 1)
         
-        # mask is zero, otherwise keep conditionals
-        hidden_states = torch.where(
+        lm_logits = self.lm_head(hidden_states)
+        lm_logits = lm_logits.view(bs, seq_len*self.patch_size, self.vocab_size)
+
+        return F.log_softmax(lm_logits, dim=-1)
+
+
+class PatchHLmEncGen(HLmEncGen):
+
+    def init_input_params(self, config: PatchHLmConfig):
+        self.patch_size = config.patch_size
+        
+        self.enc_embs = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.enc_patch_proj = nn.Linear(
+            config.patch_size*config.hidden_size,
+            config.hidden_size,
+            bias=False
+        )
+
+        self.gen_embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+        self.gen_patch_proj = nn.Linear(
+            config.patch_size*config.hidden_size,
+            config.hidden_size,
+            bias=False
+        )
+    
+
+    def get_states(self, input_ids, mask):
+        bs, seq_len = input_ids.shape[:2]
+
+        encoder_states = self.enc_embs(input_ids).view(bs, seq_len, self.patch_size*self.hidden_size)
+        encoder_states = self.enc_patch_proj(encoder_states)
+
+        generator_states = torch.where(
             mask.unsqueeze(-1).unsqueeze(-1),
-            self.embs(torch.zeros_like(input_ids)),
-            self.embs(input_ids+1)
-        ).view(bs*seq_len, self.patch_size*self.hidden_size, 1)
-        hidden_states = self.patch_proj(hidden_states).view(bs, seq_len, self.hidden_size)
+            self.gen_embs(torch.zeros_like(input_ids)),
+            self.gen_embs(input_ids+1)
+        ).view(bs, seq_len, self.patch_size*self.hidden_size)
+        generator_states = self.gen_patch_proj(generator_states)
 
-        mus = []
-        for i, layer in enumerate(self.layers):
-            
-            hidden_states, _, mu = layer(
-                hidden_states,
-                long_mask,
-                z=z[:, :, i],
-            )
+        return encoder_states, generator_states
 
-            mus.append(mu)
 
-        lm_logits = self.lm_head(self.norm(hidden_states).view(bs*seq_len, self.hidden_size, 1))
-        lm_logits = lm_logits.view(bs, seq_len*self.patch_size, -1)
-        lm_logits = F.log_softmax(lm_logits, dim=-1)
+class PatchHLmDecoder(HLmDecoder):
 
-        return lm_logits, torch.stack(mus, dim=2)
+    lm_head_type = PatchLmHead
 
 
 class PatchHLmModel(XLAModel):
 
-    config_class = HLmConfig
+    config_class = PatchHLmConfig
 
 
     def _init_weights(self, module):
@@ -202,9 +146,11 @@ class PatchHLmModel(XLAModel):
 
         self.z_size = config.z_size
         self.num_layers = config.num_layers
+        self.z_output_layers = config.z_output_layers
+        self.z_output_size = config.z_output_layers * config.z_size
         self.patch_size = config.patch_size
 
-        self.encoder = PatchHLmEncoder(config)
+        self.enc_gen = PatchHLmEncGen(config)
         self.decoder = PatchHLmDecoder(config)
 
         # Initialize weights and apply final processing
@@ -214,13 +160,20 @@ class PatchHLmModel(XLAModel):
     def forward(
         self,
         input_ids,
-        mask
+        mask,
+        num_uncond=None
     ):
+        if num_uncond is not None:
+            assert num_uncond > 0
+            assert num_uncond <= input_ids.shape[0]
+
+        # reshape to patches
         input_ids = input_ids.view(
             input_ids.shape[0],
             input_ids.shape[1]//self.patch_size,
             self.patch_size
         )
+        og_mask = mask
         mask = mask.view(
             mask.shape[0],
             mask.shape[1]//self.patch_size,
@@ -232,22 +185,31 @@ class PatchHLmModel(XLAModel):
         # sample noise for the encoder
         noise = torch.randn(
             [bs, seq_len, self.num_layers, self.z_size],
-            device=input_ids.device, dtype=self.encoder.embs.weight.dtype
+            device=input_ids.device, dtype=self.enc_gen.enc_embs.weight.dtype
         )
 
-        z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
-        lm_logits, dec_mu = self.decoder(input_ids, mask, z)
+        # pass through the encoder
+        z, enc_mu, enc_sigma, gen_mu = self.enc_gen(input_ids, mask, noise, num_uncond=num_uncond)
+
+        # get z for the decoder
+        z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
+
+        # pass through the decoder
+        lm_logits = self.decoder(mask, z_out)
 
         kl = (
             -torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu-dec_mu)**2)
+            + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2)
             - 0.5
-        ).sum(-1).sum(-1).sum(-1)
+        ).sum(-1).sum(-1)
 
-        uncond_kl = (
-            -torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + enc_mu**2)
-            - 0.5
-        ).sum(-1).sum(-1).sum(-1)
+        # expand kl to the expected shape, and remove areas that should be masked
+        kl = torch.repeat_interleave(kl/self.patch_size, self.patch_size, dim=1)
+        kl = torch.where(og_mask, kl, torch.zeros_like(kl))
 
-        return lm_logits, kl, uncond_kl
+        if num_uncond is not None:
+            uncond_kl = kl[:num_uncond]
+            kl = kl[num_uncond:]
+            return lm_logits, kl, uncond_kl
+
+        return lm_logits, kl

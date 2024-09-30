@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-patch_hlm'
+MODEL_CONFIG = 'test-patch_hlm'
 
 
 def main():
@@ -29,10 +29,11 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = PatchHLmModel(PatchHLmConfig(**config))
 
-    logits, kl, uncond_kl = model(x, mask)
+    logits, kl, uncond_kl = model(x, mask, num_uncond=1)
 
-    print(kl / mask.float().sum(-1))
-    print(uncond_kl / mask.float().sum(-1))
+    print(logits.shape)
+    print(uncond_kl)
+    print(kl)
 
 
 if __name__ == '__main__':

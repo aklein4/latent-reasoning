@@ -13,7 +13,6 @@ from utils.model_utils import (
 )
 from utils.prob_utils import GaussianIAF
 import utils.constants as constants
-from utils.logging_utils import log_master_print
 
 
 class HLmConfig(XLAConfig):
@@ -132,10 +131,10 @@ class ConditionalIO(nn.Module):
 
 class LmHead(nn.Module):
 
-    def __init__(self, hidden_size, vocab_size, eps=1e-5):
+    def __init__(self, config: HLmConfig):
         super().__init__()
-        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
-        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, hidden_states):
         logits = self.lm_head(self.norm(hidden_states))
@@ -143,6 +142,7 @@ class LmHead(nn.Module):
 
 
 class HLmEncGenLayer(nn.Module):
+
     def __init__(self, config: HLmConfig, layer_idx: int):
         super().__init__()
 
@@ -426,6 +426,11 @@ class HLmDecoderLayer(nn.Module):
 
 class HLmEncGen(nn.Module):
 
+    def init_input_params(self, config: HLmConfig):
+        self.enc_embs = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.gen_embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+
+
     def __init__(self, config: HLmConfig):
         super().__init__()
 
@@ -433,8 +438,7 @@ class HLmEncGen(nn.Module):
         self.z_size = config.z_size
         self.num_layers = config.num_layers
 
-        self.enc_embs = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.gen_embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+        self.init_input_params(config)
 
         self.layers = nn.ModuleList([
             HLmEncGenLayer(config, i)
@@ -442,6 +446,17 @@ class HLmEncGen(nn.Module):
         ])
 
         self.gradient_checkpointing = False
+
+
+    def get_states(self, input_ids, mask):
+        encoder_states = self.enc_embs(input_ids)
+        generator_states = torch.where(
+            mask.unsqueeze(-1),
+            self.gen_embs(torch.zeros_like(input_ids)),
+            self.gen_embs(input_ids+1)
+        )
+
+        return encoder_states, generator_states
 
     
     def forward(
@@ -451,16 +466,11 @@ class HLmEncGen(nn.Module):
         noise,
         num_uncond=None
     ):
-        bs, seq_len = input_ids.shape
+        bs, seq_len = input_ids.shape[:2]
         long_mask = mask.long()
         
         # get hidden states
-        encoder_states = self.enc_embs(input_ids)
-        generator_states = torch.where(
-            mask.unsqueeze(-1),
-            self.gen_embs(torch.zeros_like(input_ids)),
-            self.gen_embs(input_ids+1)
-        )
+        encoder_states, generator_states = self.get_states(input_ids, mask)
 
         # get encoder attention mask, (remove conditionals)
         enc_attn_mask = torch.zeros(bs, 1, seq_len, seq_len, device=input_ids.device, dtype=encoder_states.dtype)
@@ -493,7 +503,6 @@ class HLmEncGen(nn.Module):
         for i, layer in enumerate(self.layers):
             
             if self.gradient_checkpointing and constants.XLA_AVAILABLE:
-                log_master_print("Encoder gradient checkpointing")
                 z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = self._gradient_checkpointing_func(
                     layer.__call__,
                     encoder_states,
@@ -504,7 +513,6 @@ class HLmEncGen(nn.Module):
                     enc_attn_mask,
                     gen_attn_mask
                 )
-
             else:
                 z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = layer(
                     encoder_states,
@@ -531,6 +539,9 @@ class HLmEncGen(nn.Module):
 
 class HLmDecoder(nn.Module):
 
+    lm_head_type = LmHead
+
+
     def __init__(self, config: HLmConfig):
         super().__init__()
 
@@ -545,7 +556,7 @@ class HLmDecoder(nn.Module):
             for i in range(config.num_layers)
         ])
 
-        self.lm_head = LmHead(config.hidden_size, config.vocab_size, config.norm_eps)
+        self.lm_head = self.lm_head_type(config)
 
         self.gradient_checkpointing = False
 
@@ -555,7 +566,7 @@ class HLmDecoder(nn.Module):
         mask,
         z_out
     ):
-        bs, seq_len = mask.shape
+        bs, seq_len = mask.shape[:2]
         
         # get hidden states based on z
         hidden_states = self.z_proj(z_out)
@@ -571,7 +582,6 @@ class HLmDecoder(nn.Module):
         for i, layer in enumerate(self.layers):
             
             if self.gradient_checkpointing and constants.XLA_AVAILABLE:
-                log_master_print("Decoder gradient checkpointing")
                 hidden_states = self._gradient_checkpointing_func(
                     layer.__call__,
                     hidden_states,
@@ -584,7 +594,6 @@ class HLmDecoder(nn.Module):
                 )
         
         if self.gradient_checkpointing and constants.XLA_AVAILABLE:
-            log_master_print("LM gradient checkpointing")
             lm_logits = self._gradient_checkpointing_func(
                 self.lm_head.__call__,
                 hidden_states
