@@ -22,11 +22,12 @@ weight_decay: 0.1
 
 checkpoint_interval: 5000
 
+num_uncond: 4
+
 kl_w: 1.0
 uncond_kl_w: 0.1
 token_w: 50.0
 
 kl_threshold: 10.0
-acc_threshold: 2.0 # 0.99
 
 clip_prob: 0.75

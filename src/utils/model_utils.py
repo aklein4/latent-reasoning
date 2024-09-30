@@ -1,3 +1,4 @@
+from typing import Optional, List
 
 import torch
 import torch.nn as nn
@@ -10,15 +11,51 @@ from transformers.activations import ACT2FN
 
 class ReZeroIO(nn.Module):
 
-    def __init__(self, hidden_size, eps=1e-5):
+    def __init__(
+        self,
+        hidden_size: int,
+        eps: Optional[float]=1e-5
+    ):
+        """ Implements affine LayerNorm input with ReZero output.
+
+        Args:
+            hidden_size (int): size of hidden dimension
+            eps (float, optional): epsilon for normalization. Defaults to 1e-5.
+        """
         super().__init__()
         self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
         self.filter = nn.Parameter(torch.zeros(1, 1, hidden_size))
 
-    def enter(self, x):
-        return self.norm(x)
+
+    def enter(
+        self, 
+        hidden_states: torch.FloatTensor
+    ) -> torch.FloatTensor:
+        """ Enters the block with layer norm.
+
+        Args:
+            x (torch.FloatTensor): residual stream
+
+        Returns:
+            torch.FloatTensor: normalized tensor
+        """
+        return self.norm(hidden_states)
     
-    def exit(self, hidden_states, y):
+
+    def exit(
+        self,
+        hidden_states: torch.FloatTensor,
+        y: torch.FloatTensor
+    ) -> torch.FloatTensor:
+        """ Exits the block with ReZero.
+
+        Args:
+            hidden_states (torch.FloatTensor): residual stream
+            y (torch.FloatTensor): output tensor from the block
+
+        Returns:
+            torch.FloatTensor: residual stream with y included
+        """
         return hidden_states + self.filter * y
 
 
@@ -26,18 +63,29 @@ class FusedLinear(nn.Module):
 
     def __init__(
         self,
-        in_feature_list,
-        out_feature_list,
-        bias=True,
-        mask=None
+        in_feature_list: List[int],
+        out_feature_list: List[int],
+        bias: bool=True,
+        mask: Optional[torch.FloatTensor]=None
     ):
+        """ A linear layer that fuses multiple inputs and multiple outputs.
+        Also supports a mask for for things like autoregressive networks.
+        
+        Args:
+            in_feature_list (List[int]): Dimensions of each input feature (can be a single int)
+            out_feature_list (List[int]): Dimensions of each output feature (can be a single int)
+            bias (bool, optional): Whether to use bias in the linear layer. Defaults to True.
+            mask (Optional[torch.FloatTensor], optional): A mask to multiply the linear weight by. Defaults to None.
+        """
         super().__init__()
 
+        # check for single values
         if isinstance(in_feature_list, int):
             in_feature_list = [in_feature_list]
         if isinstance(out_feature_list, int):
             out_feature_list = [out_feature_list]
 
+        # save attributes
         self.in_feature_list = in_feature_list
         self.out_feature_list = out_feature_list
         self.bias = bias
@@ -45,23 +93,49 @@ class FusedLinear(nn.Module):
         self.total_in = sum(in_feature_list)
         self.total_out = sum(out_feature_list)
 
+        # parameters
         self.linear = nn.Linear(self.total_in, self.total_out, bias=bias)
     
+        # save mask
         self.use_mask = mask is not None
         if self.use_mask:
             assert mask.shape == self.linear.weight.shape, f'mask shape {mask.shape} does not match weight shape {self.linear.weight.shape}'
             self.register_buffer('mask', mask)
 
 
-    def _error_message(self, inputs):
+    def _error_message(
+        self,
+        inputs: List[torch.Tensor]
+    ) -> None:
+        """ Raise an error message for incorrect input sizes.
+
+        Args:
+            inputs (List[torch.Tensor]): Input tensors
+
+        Raises:
+            ValueError: Incorrect input sizes
+        """
         raise ValueError(f'expected inputs of size {self.in_feature_list}, got {[v.shape[-1] for v in inputs]}')
 
 
-    def forward(self, *inputs):
+    def forward(
+        self,
+        *inputs: List[torch.FloatTensor]
+    ) -> List[torch.FloatTensor]:
+        """ Forward pass for the fused linear layer.
+
+        Args:
+            *inputs (List[torch.FloatTensor]): Input tensors (can be a single tensor)
+
+        Returns:
+            List[torch.FloatTensor]: Output tensors (single tensor if only one output)
+        """
+
+        # check inputs
         if len(inputs) != len(self.in_feature_list):
             self._error_message(inputs)
 
-        # configure and check inputs
+        # convert to single tensor and check again
         if len(self.in_feature_list) > 1:
             x = torch.cat(inputs, dim=-1)
         else:
@@ -79,7 +153,7 @@ class FusedLinear(nn.Module):
         else:
             x = self.linear(x)
 
-        # configure outputs
+        # convert outputs
         if len(self.out_feature_list) == 1:
             return x
         return torch.split(x, self.out_feature_list, dim=-1)
@@ -146,7 +220,8 @@ class RotaryAttention(nn.Module):
 
         # apply rope
         if self.use_rope:
-            query_states, key_states = self.rope(query_states, key_states, position_ids)
+            query_states = self.rope(query_states, position_ids)
+            key_states = self.rope(key_states, position_ids)
 
         # update/apply cache
         if past_key_value is not None:
@@ -235,29 +310,21 @@ class RotaryEmbedding(nn.Module):
         return torch.cat((-x2, x1), dim=-1)
 
 
-    def forward(self, q, k, position_ids):
-        assert q.shape[-1] == self.total_dim, f'q shape {q.shape} does not match total_dim {self.total_dim}'
-        assert k.shape[-1] == self.total_dim, f'k shape {k.shape} does not match total_dim {self.total_dim}'
+    def forward(self, x, position_ids):
+        assert x.shape[-1] == self.total_dim, f'shape {q.shape} does not match total_dim {self.total_dim}'
 
-        sin, cos = self._get_sin_cos(q, position_ids)
+        sin, cos = self._get_sin_cos(x, position_ids)
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
 
         if self.dim == self.total_dim:
-            q = (q * cos) + (self._rotate_half(q) * sin)
-            k = (k * cos) + (self._rotate_half(k) * sin)
-            return q, k
+            return (x * cos) + (self._rotate_half(x) * sin)
 
-        q_rot, q_no_rot = q[..., : self.dim], q[..., self.dim :]
-        k_rot, k_no_rot = k[..., : self.dim], k[..., self.dim :]
+        rot, no_rot = x[..., : self.dim], x[..., self.dim :]
 
-        q_rot = (q_rot * cos) + (self._rotate_half(q_rot) * sin)
-        k_rot = (k_rot * cos) + (self._rotate_half(k_rot) * sin)
+        rot = (rot * cos) + (self._rotate_half(rot) * sin)
 
-        q = torch.cat((q_rot, q_no_rot), dim=-1)
-        k = torch.cat((k_rot, k_no_rot), dim=-1)
-
-        return q, k
+        return torch.cat((rot, no_rot), dim=-1)
 
 
 class GLU(nn.Module):

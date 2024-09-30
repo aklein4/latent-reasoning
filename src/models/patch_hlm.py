@@ -7,7 +7,7 @@ import numpy as np
 from models.xla import XLAModel
 from models.hlm import (
     HLmConfig,
-    HLmEncoderLayer,
+    HLmEncGenLayer,
     HLmDecoderLayer,
 )
 
