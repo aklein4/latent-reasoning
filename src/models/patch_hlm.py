@@ -72,11 +72,17 @@ class PatchLmHead(nn.Module):
         hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states.view(-1, self.hidden_size, 1)
         
+        log_master_print("Before:", hidden_states.dtype)
         lm_logits = self.lm_head(hidden_states)
+        log_master_print("After:", lm_logits.dtype)
         lm_logits = lm_logits.view(bs, seq_len*self.patch_size, self.vocab_size)
 
-        return F.log_softmax(lm_logits, dim=-1)
+        out = F.log_softmax(lm_logits, dim=-1, dtype=torch.bfloat16)
+        log_master_print("Out:", out.dtype)
 
+        return out
+
+from utils.logging_utils import log_master_print
 
 class PatchHLmEncGen(HLmEncGen):
 
