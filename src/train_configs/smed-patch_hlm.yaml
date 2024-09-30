@@ -4,10 +4,10 @@ collator_type: seq2seq
 dataset: fw-45b
 stream_dataset: true
 
-sequence_length: 1024
+sequence_length: 256
 
-bs: 4096
-mini_bs: 32
+bs: 8196
+mini_bs: 128
 
 warmup_steps: 2000
 lr_steps: 20000
