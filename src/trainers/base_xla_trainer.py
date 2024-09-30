@@ -14,6 +14,7 @@ import huggingface_hub as hf
 import utils.constants as constants
 from utils.data_utils import DotDict
 from utils.logging_utils import LogSection, log_print, log_master_print
+from utils.optimization_utils import LowPrecisionAdafactor
 
 
 class BaseXLATrainer:
@@ -115,11 +116,11 @@ class BaseXLATrainer:
 
 
     def get_optimizer(self, model):
-        return syncfree.AdamW(
+        return LowPrecisionAdafactor(
             model.parameters(), lr=self.start_lr,
-            betas=(self.beta1, self.beta2),
-            eps=self.eps,
-            weight_decay=self.weight_decay
+            low_precision=self.low_precision_optimizer,
+
+            **self.optimizer_kwargs
         )
 
 
@@ -224,9 +225,14 @@ class BaseXLATrainer:
                 if len(results_accum) > 1:
                     xm.mark_step()
 
+            # downcast gradients for communication
+            for p in model.parameters():
+                if p.grad is not None and p.grad.numel() >= self.downcast_gradient_threshold:
+                    p.grad = p.grad.to(torch.bfloat16)
+
             # perform a single optimizer step
             xm.optimizer_step(optimizer)
-            optimizer.zero_grad(set_to_none=(len(results_accum) == 1))
+            optimizer.zero_grad(set_to_none=(num_mini_batches == 1))
 
             # update lr
             self.log.lr = lr_scheduler.get_last_lr()[0]

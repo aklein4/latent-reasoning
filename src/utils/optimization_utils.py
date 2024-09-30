@@ -112,4 +112,12 @@ class LowPrecisionAdafactor(Adafactor):
                 if p.dtype in {torch.float16, torch.bfloat16}:
                     p.copy_(p_data_fp32)
 
+                # downcast the state
+                if (
+                    self.low_precision and
+                    len(grad_shape) >= 2 and 
+                    use_first_moment
+                ):
+                    state["exp_avg"] = state["exp_avg"].to(torch.bfloat16)
+
         return loss
