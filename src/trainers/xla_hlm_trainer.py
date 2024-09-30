@@ -65,9 +65,9 @@ class XLAHLmTrainer(BaseXLATrainer):
 
     def train_step(self, step, model, x, mask):
         cond_x = x[self.num_uncond:]
-        uncond_x = mask[:self.num_uncond]
-        cond_mask = self.mask[self.num_uncond:]
-        uncond_mask = self.mask[:self.num_uncond]
+        uncond_x = x[:self.num_uncond]
+        cond_mask = mask[self.num_uncond:]
+        uncond_mask = mask[:self.num_uncond]
 
         logits, kl, uncond_kl = model(x, mask, num_uncond=self.num_uncond)
 
