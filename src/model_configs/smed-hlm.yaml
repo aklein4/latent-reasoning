@@ -1,7 +1,7 @@
 
-model_type: patch_hlm
+model_type: hlm
 architectures: [
-    PatchHLmModel
+    HLmModel
 ]
 
 max_sequence_length: 1024
