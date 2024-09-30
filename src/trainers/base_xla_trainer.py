@@ -225,11 +225,6 @@ class BaseXLATrainer:
                 if len(results_accum) > 1:
                     xm.mark_step()
 
-            # downcast gradients for communication
-            for p in model.parameters():
-                if p.grad is not None and p.grad.numel() >= self.downcast_gradient_threshold:
-                    p.grad = p.grad.to(torch.bfloat16)
-
             # perform a single optimizer step
             xm.optimizer_step(optimizer)
             optimizer.zero_grad(set_to_none=(num_mini_batches == 1))

@@ -23,7 +23,6 @@ optimizer_kwargs:
     relative_step: false
 
 low_precision_optimizer: true
-downcast_gradient_threshold: 10000
 
 kl_w: 1.0
 uncond_kl_w: 0.1
