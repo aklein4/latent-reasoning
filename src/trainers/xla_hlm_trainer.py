@@ -82,8 +82,8 @@ class XLAHLmTrainer(BaseXLATrainer):
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
-            kl_loss=self.kl_loss(kl, cond_mask),
-            uncond_kl_loss=self.kl_loss(uncond_kl, uncond_mask),
+            kl_loss=self.kl_loss(kl),
+            uncond_kl_loss=self.kl_loss(uncond_kl),
             
             acc=self.acc(logits, x, mask),
             clip_perc=self.clip_perc(mask, clip_mask),

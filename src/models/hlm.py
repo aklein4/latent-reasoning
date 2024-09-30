@@ -129,6 +129,18 @@ class ConditionalIO(nn.Module):
         )
 
 
+class LmHead(nn.Module):
+
+    def __init__(self, hidden_size, vocab_size, eps=1e-5):
+        super().__init__()
+        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
+        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+
+    def forward(self, hidden_states):
+        logits = self.lm_head(self.norm(hidden_states))
+        return F.log_softmax(logits, dim=-1)
+
+
 class HLmEncGenLayer(nn.Module):
     def __init__(self, config: HLmConfig, layer_idx: int):
         super().__init__()
@@ -428,6 +440,8 @@ class HLmEncGen(nn.Module):
             for i in range(config.num_layers)
         ])
 
+        self.gradient_checkpointing = False
+
     
     def forward(
         self,
@@ -477,15 +491,28 @@ class HLmEncGen(nn.Module):
         gen_mus = []
         for i, layer in enumerate(self.layers):
             
-            z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = layer(
-                encoder_states,
-                generator_states,
-                long_mask,
-                noise[:, :, i],
-                padded_noise[:, :, i+1],
-                enc_attn_mask,
-                gen_attn_mask
-            )
+            if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+                z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = self._gradient_checkpointing_func(
+                    layer.__call__,
+                    encoder_states,
+                    generator_states,
+                    long_mask,
+                    noise[:, :, i],
+                    padded_noise[:, :, i+1],
+                    enc_attn_mask,
+                    gen_attn_mask
+                )
+
+            else:
+                z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = layer(
+                    encoder_states,
+                    generator_states,
+                    long_mask,
+                    noise[:, :, i],
+                    padded_noise[:, :, i+1],
+                    enc_attn_mask,
+                    gen_attn_mask
+                )
 
             zs.append(z)
             enc_mus.append(enc_mu)
@@ -516,8 +543,9 @@ class HLmDecoder(nn.Module):
             for i in range(config.num_layers)
         ])
 
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = LmHead(config.hidden_size, config.vocab_size, config.norm_eps)
+
+        self.gradient_checkpointing = False
 
 
     def forward(
@@ -540,13 +568,25 @@ class HLmDecoder(nn.Module):
 
         for i, layer in enumerate(self.layers):
             
-            hidden_states = layer(
-                hidden_states,
-                attn_mask
-            )
+            if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+                hidden_states = self._gradient_checkpointing_func(
+                    layer.__call__,
+                    hidden_states,
+                    attn_mask
+                )
+            else:
+                hidden_states = layer(
+                    hidden_states,
+                    attn_mask
+                )
         
-        lm_logits = self.lm_head(self.norm(hidden_states))
-        lm_logits = F.log_softmax(lm_logits, dim=-1)
+        if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+            hidden_states = self._gradient_checkpointing_func(
+                self.lm_head.__call__,
+                hidden_states
+            )
+        else:
+            lm_logits = self.lm_head(hidden_states)
 
         return lm_logits
 
