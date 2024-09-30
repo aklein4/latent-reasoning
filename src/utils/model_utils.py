@@ -210,6 +210,8 @@ class RotaryAttention(nn.Module):
         position_ids=None,
         attention_mask=None,
         past_key_value=None,
+        q_position_ids=None,
+        k_position_ids=None
     ):
         # get shapes
         bsz, q_len, _ = query_states.shape
@@ -220,8 +222,16 @@ class RotaryAttention(nn.Module):
 
         # apply rope
         if self.use_rope:
-            query_states = self.rope(query_states, position_ids)
-            key_states = self.rope(key_states, position_ids)
+
+            if (q_position_ids is not None) or (k_position_ids is not None):
+                assert position_ids is None, 'cannot use both position_ids and q/k_position_ids'
+
+                query_states = self.rope(query_states, q_position_ids)
+                key_states = self.rope(key_states, k_position_ids)
+            
+            else:
+                query_states = self.rope(query_states, position_ids)
+                key_states = self.rope(key_states, position_ids)
 
         # update/apply cache
         if past_key_value is not None:
@@ -311,7 +321,7 @@ class RotaryEmbedding(nn.Module):
 
 
     def forward(self, x, position_ids):
-        assert x.shape[-1] == self.total_dim, f'shape {q.shape} does not match total_dim {self.total_dim}'
+        assert x.shape[-1] == self.total_dim, f'shape {x.shape} does not match total_dim {self.total_dim}'
 
         sin, cos = self._get_sin_cos(x, position_ids)
         cos = cos.unsqueeze(1)
