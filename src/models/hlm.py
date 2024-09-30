@@ -13,6 +13,7 @@ from utils.model_utils import (
 )
 from utils.prob_utils import GaussianIAF
 import utils.constants as constants
+from utils.logging_utils import log_master_print
 
 
 class HLmConfig(XLAConfig):
@@ -492,6 +493,7 @@ class HLmEncGen(nn.Module):
         for i, layer in enumerate(self.layers):
             
             if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+                log_master_print("Encoder gradient checkpointing")
                 z, encoder_states, generator_states, enc_mu, enc_sigma, gen_mu = self._gradient_checkpointing_func(
                     layer.__call__,
                     encoder_states,
@@ -569,6 +571,7 @@ class HLmDecoder(nn.Module):
         for i, layer in enumerate(self.layers):
             
             if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+                log_master_print("Decoder gradient checkpointing")
                 hidden_states = self._gradient_checkpointing_func(
                     layer.__call__,
                     hidden_states,
@@ -581,6 +584,7 @@ class HLmDecoder(nn.Module):
                 )
         
         if self.gradient_checkpointing and constants.XLA_AVAILABLE:
+            log_master_print("LM gradient checkpointing")
             hidden_states = self._gradient_checkpointing_func(
                 self.lm_head.__call__,
                 hidden_states
