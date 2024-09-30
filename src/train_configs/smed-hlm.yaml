@@ -6,23 +6,23 @@ stream_dataset: true
 
 sequence_length: 256
 
-bs: 2048
+bs: 4096
 mini_bs: 32
 
-warmup_steps: 500
+warmup_steps: 2000
 lr_steps: 20000
-
-start_lr: 0.0003 # 4
-end_lr: 0.00003 # 4
-
-beta1: 0.9
-beta2: 0.95
-eps: 0.00000001
-weight_decay: 0.1
-
 checkpoint_interval: 5000
 
-num_uncond: 4
+start_lr: 0.0003
+end_lr: 0.00003
+
+optimizer_kwargs:
+    beta1: 0.9
+    weight_decay: 0.1
+    scale_parameter: false
+    relative_step: false
+
+low_precision_optimizer: true
 
 kl_w: 1.0
 uncond_kl_w: 0.1
@@ -31,3 +31,5 @@ token_w: 50.0
 kl_threshold: 10.0
 
 clip_prob: 0.75
+
+num_uncond: 4
