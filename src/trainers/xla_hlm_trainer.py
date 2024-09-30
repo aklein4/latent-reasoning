@@ -75,6 +75,7 @@ class XLAHLmTrainer(BaseXLATrainer):
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
         log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
+        log_probs = log_probs.to(kl.dtype)
 
         # current version is raw logit clipping
         kl_clip = self.kl_per_token(kl, cond_mask) > self.kl_threshold

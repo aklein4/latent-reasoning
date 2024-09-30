@@ -10,6 +10,7 @@ from models.hlm import (
     HLmEncGen,
     HLmDecoder,
 )
+import utils.constants as constants
 
 
 class PatchHLmConfig(HLmConfig):
@@ -71,13 +72,19 @@ class PatchLmHead(nn.Module):
 
         hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states.view(-1, self.hidden_size, 1)
-        
+        if constants.XLA_AVAILABLE:
+            hidden_states = hidden_states.to(torch.bfloat16)
+
         log_master_print(f"Before: {hidden_states.dtype}")
         lm_logits = self.lm_head(hidden_states)
         log_master_print(f"After: {lm_logits.dtype}")
         lm_logits = lm_logits.view(bs, seq_len*self.patch_size, self.vocab_size)
 
-        out = F.log_softmax(lm_logits, dim=-1, dtype=torch.bfloat16)
+        out = F.log_softmax(
+            lm_logits,
+            dim=-1,
+            dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
+        )
         log_master_print(f"Out: {out.dtype}")
 
         return out
