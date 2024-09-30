@@ -143,7 +143,7 @@ class LmHead(nn.Module):
 
     def forward(self, hidden_states):
         lm_logits = self.lm_head(self.norm(hidden_states))
-        F.log_softmax(
+        return F.log_softmax(
             lm_logits,
             dim=-1,
             dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
