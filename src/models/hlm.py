@@ -585,7 +585,7 @@ class HLmDecoder(nn.Module):
         
         if self.gradient_checkpointing and constants.XLA_AVAILABLE:
             log_master_print("LM gradient checkpointing")
-            hidden_states = self._gradient_checkpointing_func(
+            lm_logits = self._gradient_checkpointing_func(
                 self.lm_head.__call__,
                 hidden_states
             )
