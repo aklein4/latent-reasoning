@@ -16,6 +16,8 @@ from utils.data_utils import DotDict
 from utils.logging_utils import LogSection, log_print, log_master_print
 from utils.optimization_utils import LowPrecisionAdafactor
 
+import torch_xla.debug.metrics as met
+
 
 class BaseXLATrainer:
 
@@ -269,6 +271,8 @@ class BaseXLATrainer:
             
             # add closure
             xm.add_step_closure(_post_step)
+
+            log_master_print(met.metrics_report())
 
         # try:
         self.save_checkpoint(
