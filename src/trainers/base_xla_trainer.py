@@ -181,7 +181,7 @@ class BaseXLATrainer:
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 
-            if curr_step == 5:
+            if curr_step == 5 and constants.XLA_MAIN():
                 xp.trace_detached('localhost:9012', TENSORBOARD_DIR)
 
             # prepare minibatches
