@@ -27,7 +27,7 @@ z_size: 384
 z_mlp_mult: 2
 
 z_output_layers: 4
-reverse_z: false
+reverse_z: true
 
 patch_size: 4
 

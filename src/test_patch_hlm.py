@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'long-patch_hlm'
+MODEL_CONFIG = 'test-patch_hlm'
 
 
 def main():

@@ -206,7 +206,7 @@ class PatchHLmModel(XLAModel):
 
         # sample noise for the encoder
         noise = torch.randn(
-            [bs, seq_len, self.num_layers, self.z_size],
+            [1, seq_len, self.num_layers, self.z_size],
             device=input_ids.device, dtype=self.encoder.embs.weight.dtype
         )
 
