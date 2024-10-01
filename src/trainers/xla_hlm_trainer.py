@@ -64,6 +64,8 @@ class XLAHLmTrainer(BaseXLATrainer):
 
 
     def train_step(self, step, model, x, mask):
+        bs, seq_len = x.shape
+        
         cond_x = x[self.num_uncond:]
         uncond_x = x[:self.num_uncond]
         cond_mask = mask[self.num_uncond:]
@@ -73,7 +75,9 @@ class XLAHLmTrainer(BaseXLATrainer):
 
         # log probs, with zero for unmasked tokens
         ar = torch.arange(x.numel(), device=x.device, dtype=x.dtype)
-        log_probs = logits.view(-1, logits.shape[-1])[ar, x.view(-1)].view(*x.shape)
+        ar_bs = ar // seq_len
+        ar_seq = ar % seq_len
+        log_probs = logits[ar_bs, ar_seq, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
         log_probs = log_probs.to(kl.dtype)
 
