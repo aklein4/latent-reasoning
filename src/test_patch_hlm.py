@@ -29,8 +29,9 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = PatchHLmModel(PatchHLmConfig(**config), fast_start=True)
 
-    print(f"{sum([p.numel() for p in model.generator.parameters()]):_}")
-    print(f"{sum([p.numel() for p in model.decoder.parameters()]):_}")
+    print(f"Encoder: {sum([p.numel() for p in model.encoder.parameters()]):_}")
+    print(f"Generator: {sum([p.numel() for p in model.generator.parameters()]):_}")
+    print(f"Decoder: {sum([p.numel() for p in model.decoder.parameters()]):_}")
 
     logits, kl, uncond_kl = model(x, mask, num_uncond=1)
 
