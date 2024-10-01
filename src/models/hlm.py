@@ -209,10 +209,7 @@ class HLmEncoderLayer(nn.Module):
         self.mlp = GLU(config.hidden_act)
 
         # z scale
-        self.z_scale = np.sqrt(
-            (config.patch_size if hasattr(config, 'patch_size') else 1.0) /
-            (config.z_size * config.num_layers)
-        )
+        self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
 
 
     @torch.no_grad()
@@ -329,10 +326,7 @@ class HLmGeneratorLayer(nn.Module):
         self.mlp = GLU(config.hidden_act)
 
         # z scale
-        self.z_scale = np.sqrt(
-            (config.patch_size if hasattr(config, 'patch_size') else 1.0) /
-            (config.z_size * config.num_layers)
-        )
+        self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
 
 
     def forward(
@@ -449,25 +443,32 @@ class HLmEncoder(nn.Module):
         self.z_size = config.z_size
         self.num_layers = config.num_layers
 
-        self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
-
         self.layers = nn.ModuleList([
             HLmEncoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
+        self.init_input_params(config)
+
+
+    def init_input_params(self, config: HLmConfig):
+        self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
+
+    def get_hidden_states(self, input_ids, mask):
+        return self.embs(input_ids)
     
+
     def forward(
         self,
         input_ids,
         mask,
         noise
     ):
-        bs, seq_len = input_ids.shape
         long_mask = mask.long()
         
-        hidden_states = self.embs(input_ids)
-        
+        hidden_states = self.get_hidden_states(input_ids, mask)
+        bs, seq_len = hidden_states.shape[:2]
+
         # mask out conditionals
         attn_mask = torch.zeros(1, 1, seq_len, seq_len, device=input_ids.device, dtype=hidden_states.dtype)
         attn_mask = torch.where(
@@ -514,12 +515,23 @@ class HLmGenerator(nn.Module):
         self.z_size = config.z_size
         self.num_layers = config.num_layers
 
-        self.embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
-
         self.layers = nn.ModuleList([
             HLmGeneratorLayer(config, i)
             for i in range(config.num_layers)
         ])
+
+        self.init_input_params(config)
+
+    
+    def init_input_params(self, config: HLmConfig):
+        self.embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+
+    def get_hidden_states(self, input_ids, mask):
+        return torch.where(
+            mask.unsqueeze(-1),
+            self.embs(torch.zeros_like(input_ids)),
+            self.embs(input_ids+1)
+        )
 
 
     def forward(
@@ -529,15 +541,10 @@ class HLmGenerator(nn.Module):
         z,
         num_uncond=None
     ):
-        bs, seq_len = input_ids.shape
         long_mask = mask.long()
         
-        # mask is zero, otherwise keep conditionals
-        hidden_states = torch.where(
-            mask.unsqueeze(-1),
-            self.embs(torch.zeros_like(input_ids)),
-            self.embs(input_ids+1)
-        )
+        hidden_states = self.get_hidden_states(input_ids, mask)
+        bs, seq_len = hidden_states.shape[:2]
 
         # mask out conditionals for uncond sequences
         attn_mask = torch.zeros(bs, 1, seq_len, seq_len, device=input_ids.device, dtype=hidden_states.dtype)

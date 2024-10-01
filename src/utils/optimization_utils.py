@@ -10,6 +10,7 @@ class LowPrecisionAdafactor(Adafactor):
         self,
         params,
         low_precision=True,
+        factored_threshold=16384,
         **kwargs
     ):
         super().__init__(
@@ -18,6 +19,14 @@ class LowPrecisionAdafactor(Adafactor):
         )
 
         self.low_precision = low_precision
+        self.factored_threshold = factored_threshold
+
+
+    @staticmethod
+    def _get_options(param_group, param_shape, factored_threshold):
+        factored = math.prod(param_shape) >= factored_threshold
+        use_first_moment = param_group["beta1"] is not None
+        return factored, use_first_moment
 
 
     @torch.no_grad()
@@ -46,7 +55,7 @@ class LowPrecisionAdafactor(Adafactor):
                 state = self.state[p]
                 grad_shape = grad.shape
 
-                factored, use_first_moment = self._get_options(group, grad_shape)
+                factored, use_first_moment = self._get_options(group, grad_shape, self.factored_threshold)
                 # State Initialization
                 if len(state) == 0:
                     state["step"] = 0
@@ -115,8 +124,8 @@ class LowPrecisionAdafactor(Adafactor):
                 # downcast the state
                 if (
                     self.low_precision and
-                    len(grad_shape) >= 2 and 
-                    use_first_moment
+                    use_first_moment and
+                    factored
                 ):
                     state["exp_avg"] = state["exp_avg"].to(torch.bfloat16)
 

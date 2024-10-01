@@ -118,8 +118,6 @@ class BaseXLATrainer:
     def get_optimizer(self, model):
         return LowPrecisionAdafactor(
             model.parameters(), lr=self.start_lr,
-            low_precision=self.low_precision_optimizer,
-
             **self.optimizer_kwargs
         )
 
