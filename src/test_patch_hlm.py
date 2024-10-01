@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-patch_hlm'
+MODEL_CONFIG = 'long-patch_hlm'
 
 
 def main():
@@ -29,9 +29,8 @@ def main():
     config = load_model_config(MODEL_CONFIG)
     model = PatchHLmModel(PatchHLmConfig(**config), fast_start=True)
 
-    # for name, module in model.enc_gen.layers[0].named_modules():
-    #     print(f"{name}: {sum([p.numel() for p in module.parameters()]):_}")
-    # exit()
+    print(f"{sum([p.numel() for p in model.generator.parameters()]):_}")
+    print(f"{sum([p.numel() for p in model.decoder.parameters()]):_}")
 
     logits, kl, uncond_kl = model(x, mask, num_uncond=1)
 
