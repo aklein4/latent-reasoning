@@ -16,7 +16,8 @@ from utils.data_utils import DotDict
 from utils.logging_utils import LogSection, log_print, log_master_print
 from utils.optimization_utils import LowPrecisionAdafactor
 
-import torch_xla.debug.metrics as met
+
+TENSORBOARD_DIR = '~/tensorboard'
 
 
 class BaseXLATrainer:
@@ -46,10 +47,14 @@ class BaseXLATrainer:
 
         if constants.XLA_MAIN() and not self.debug:
             with LogSection("Save Locations Creation"):
+                
                 hf.create_repo(
                     save_name, private=True, exist_ok=True
                 )
+                
                 os.makedirs(constants.LOCAL_DATA_PATH, exist_ok=True)
+                
+                wandb.tensorboard.patch(root_logdir=TENSORBOARD_DIR)
                 wandb.init(
                     project=project,
                     name=name,
@@ -154,6 +159,8 @@ class BaseXLATrainer:
         model,
         loader
     ):
+        import torch_xla.debug.profiler as xp
+        server = xp.start_server(9012)
 
         # init model
         for p in model.parameters():
@@ -173,6 +180,9 @@ class BaseXLATrainer:
         # run loop
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
+
+            if curr_step == 5:
+                xp.trace_detached('localhost:9012', TENSORBOARD_DIR)
 
             # prepare minibatches
             mini_batches = []
@@ -271,8 +281,6 @@ class BaseXLATrainer:
             
             # add closure
             xm.add_step_closure(_post_step)
-
-            log_master_print(met.metrics_report())
 
         # try:
         self.save_checkpoint(

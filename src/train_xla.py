@@ -40,12 +40,12 @@ def _mp_fn(index, args):
 
     model = model.to(constants.XLA_DEVICE())
     if not args.debug:
-        log_print("Syncing model...")
+        log_print("Syncing model... MUST REIMPLEMENT!!!!!!!!")
 
         # broadcast with bfloat16 for speed
-        model = model.to(torch.bfloat16)
-        xm.broadcast_master_param(model)
-        model = model.to(torch.float32)
+        # model = model.to(torch.bfloat16)
+        # xm.broadcast_master_param(model)
+        # model = model.to(torch.float32)
 
     log_print("Loading data...")
     loader = get_loader(
