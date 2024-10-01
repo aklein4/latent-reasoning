@@ -183,6 +183,9 @@ class BaseXLATrainer:
 
             if curr_step == 5 and constants.XLA_MAIN():
                 xp.trace_detached('localhost:9012', TENSORBOARD_DIR)
+            if curr_step == 10 and constants.XLA_MAIN():
+                wandb.finish()
+                raise ValueError("STOPPING")
 
             # prepare minibatches
             mini_batches = []
