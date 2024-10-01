@@ -177,13 +177,24 @@ class HLmEncoderLayer(nn.Module):
             config.hidden_act
         )
 
-        # attention components, input order: hidden, z, next_noise
-        self.attn_proj = FusedLinear(
-            [self.hidden_size, self.z_size, self.z_size],
-            [self.qkv_size]*3,
-            bias=False,
-            mask=self._get_qkv_matrix_mask(config)
+        # transformer projections
+        self.up = FusedLinear(
+            [self.hidden_size, self.z_size],
+            [self.qkv_size, 2*self.qkv_size] + [config.mlp_size]*2,
+            bias=False
         )
+        self.iaf_up = FusedLinear(
+            self.z_size,
+            2*self.qkv_size,
+            bias=False,
+            mask=self._get_iaf_up_mask(config)
+        )
+        self.down = FusedLinear(
+            [self.z_size, self.qkv_size, config.mlp_size],
+            config.hidden_size,
+            bias=False
+        )
+
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
@@ -195,21 +206,7 @@ class HLmEncoderLayer(nn.Module):
             layer_idx,
             position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
-
-        # mlp components, input order: hidden, z, iaf_out
-        self.mlp_proj = FusedLinear(
-            [self.hidden_size, self.z_size, self.iaf_output_size],
-            [self.mlp_size]*2,
-            bias=False
-        )
         self.mlp = GLU(config.hidden_act)
-
-        # output components, input order: z, attn, mlp
-        self.down_proj = FusedLinear(
-            [self.z_size, self.qkv_size, self.mlp_size],
-            self.hidden_size,
-            bias=False
-        )
 
         # z scale
         self.z_scale = np.sqrt(
@@ -219,23 +216,17 @@ class HLmEncoderLayer(nn.Module):
 
 
     @torch.no_grad()
-    def _get_qkv_matrix_mask(self, config: HLmConfig):
-        
-        # hidden states and can apply to anything
-        hidden_mask = torch.ones(3*self.qkv_size, self.hidden_size)
-        z_mask = torch.ones(3*self.qkv_size, self.z_size)
-
-        # noise can ONLY apply to iaf heads k and v
-        noise_q_mask = torch.zeros(self.qkv_size, self.z_size)
-        
+    def _get_iaf_up_mask(self, config: HLmConfig):
+  
+        # only iaf heads can see the next noise
         noise_iaf_mask = torch.ones(self.num_iaf_heads*config.attention_head_size, self.z_size)
         noise_bid_mask = torch.zeros(self.num_bid_heads*config.attention_head_size, self.z_size)
+        
+        # expand to cover k and v
         noise_kv_mask = torch.cat([noise_iaf_mask, noise_bid_mask], dim=0)
         noise_kv_mask = noise_kv_mask.repeat(2, 1)
 
-        noise_mask = torch.cat([noise_q_mask, noise_kv_mask], dim=0)
-
-        return torch.cat([hidden_mask, z_mask, noise_mask], dim=1)
+        return noise_kv_mask
 
 
     @torch.no_grad()
@@ -276,20 +267,20 @@ class HLmEncoderLayer(nn.Module):
         # z becomes zero when noise and params are zeroed
         z = mu + sigma * noise
 
+        # apply transformer
+        q, kv, mlp_gate, mlp_val = self.up(x, z)
+        kv = kv + self.iaf_up(next_noise)
+
         # get attn
         attn_out = self.attention(
-            *self.attn_proj(x, z, next_noise),
+            q, *kv.chunk(2, dim=-1),
             attention_mask=attn_mask
         )
-
-        # get mlp
-        mlp_out = self.mlp(
-            *self.mlp_proj(x, z, attn_out[:, :, :self.iaf_output_size])
-        )
+        mlp_out = self.mlp(mlp_gate, mlp_val)
 
         hidden_states = self.io.exit(
             hidden_states,
-            self.down_proj(z, attn_out, mlp_out),
+            self.down(z, attn_out, mlp_out),
         )
 
         return hidden_states, z, mu, sigma

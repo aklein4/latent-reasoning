@@ -93,7 +93,6 @@ class XLAHLmTrainer(BaseXLATrainer):
             acc=self.acc(logits, x, mask),
             clip_perc=self.clip_perc(mask, clip_mask),
             
-
             logp_per_token=self.logp_per_token(log_probs, mask),
             logp_per_token_nopad=self.logp_per_token_nopad(log_probs, mask, x, model.config.pad_token_id),
             
