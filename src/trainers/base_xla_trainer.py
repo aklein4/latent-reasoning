@@ -160,6 +160,11 @@ class BaseXLATrainer:
         import torch_xla.debug.profiler as xp
         if constants.XLA_MAIN():
             server = xp.start_server(9012)
+            xp.trace_detached(
+                f'localhost:{9012}',
+                "~/tensorboard"
+                duration_ms=120
+            )
 
         # init model
         for p in model.parameters():
@@ -180,7 +185,7 @@ class BaseXLATrainer:
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 
-                if curr_step == 10 and constants.XLA_MAIN():
+                if curr_step == 100 and constants.XLA_MAIN():
                     wandb.finish()
                     raise ValueError("STOPPING")
 
@@ -209,29 +214,27 @@ class BaseXLATrainer:
                 for mini_batch in mini_batches:
 
                     # get results from train step
-                    with xp.Trace('loss', disable=(not constants.XLA_MAIN())): 
-                        with autocast(constants.XLA_DEVICE()):
-                            results = self.train_step(
-                                curr_step,
-                                model,
-                                *mini_batch
-                            )
+                    with autocast(constants.XLA_DEVICE()):
+                        results = self.train_step(
+                            curr_step,
+                            model,
+                            *mini_batch
+                        )
 
-                            # scale results for accumulation
-                            # reductions are done by averaging across devices, summing across mini batches
+                        # scale results for accumulation
+                        # reductions are done by averaging across devices, summing across mini batches
+                        for k, v in results.items():
+                            results[k] = v / num_mini_batches
+
+                        # sum results
+                        with torch.no_grad():
                             for k, v in results.items():
-                                results[k] = v / num_mini_batches
-
-                            # sum results
-                            with torch.no_grad():
-                                for k, v in results.items():
-                                    if k not in results_accum:
-                                        results_accum[k] = 0.0
-                                    results_accum[k] = results_accum[k] + v.detach()
-                        
+                                if k not in results_accum:
+                                    results_accum[k] = 0.0
+                                results_accum[k] = results_accum[k] + v.detach()
+                    
                     # gradient reduction is done by averaging across devices, summing across mini batches
-                    with xp.Trace('backward', disable=(not constants.XLA_MAIN())):
-                        results.loss.backward()
+                    results.loss.backward()
 
                     # mark step if using gradient accumulation
                     if len(results_accum) > 1:
