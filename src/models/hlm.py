@@ -10,6 +10,7 @@ from utils.model_utils import (
     RotaryAttention,
     GLU,
     ReZeroIO,
+    apply_fsdp
 )
 from utils.prob_utils import GaussianIAF
 import utils.constants as constants
@@ -146,7 +147,6 @@ class LmHead(nn.Module):
         return F.log_softmax(
             lm_logits,
             dim=-1,
-            dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
         )
 
 
@@ -434,7 +434,20 @@ class HLmDecoderLayer(nn.Module):
         return hidden_states
 
 
+class HLmEncoderInput(nn.Module):
+
+    def __init__(self, config: HLmConfig):
+        super().__init__()
+        self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
+
+    def forward(self, input_ids, mask):
+        return self.embs(input_ids)
+
+
 class HLmEncoder(nn.Module):
+
+    input_type = HLmEncoderInput
+
 
     def __init__(self, config: HLmConfig):
         super().__init__()
@@ -443,20 +456,22 @@ class HLmEncoder(nn.Module):
         self.z_size = config.z_size
         self.num_layers = config.num_layers
 
+        self.input_module = self.input_type(config)
+
         self.layers = nn.ModuleList([
             HLmEncoderLayer(config, i)
             for i in range(config.num_layers)
         ])
 
-        self.init_input_params(config)
-
-
-    def init_input_params(self, config: HLmConfig):
-        self.embs = nn.Embedding(config.vocab_size, config.hidden_size)
-
-    def get_hidden_states(self, input_ids, mask):
-        return self.embs(input_ids)
+        self.gradient_checkpointing = False
     
+
+    def init_fsdp(self):
+        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing)
+
+        for i, layer in enumerate(self.layers):
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
+
 
     def forward(
         self,
@@ -466,7 +481,7 @@ class HLmEncoder(nn.Module):
     ):
         long_mask = mask.long()
         
-        hidden_states = self.get_hidden_states(input_ids, mask)
+        hidden_states = self.input_module(input_ids, mask)
         bs, seq_len = hidden_states.shape[:2]
 
         # mask out conditionals
@@ -506,7 +521,24 @@ class HLmEncoder(nn.Module):
         )
 
 
+class HLmGeneratorInput(nn.Module):
+
+    def __init__(self, config: HLmConfig):
+        super().__init__()
+        self.embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
+
+    def forward(self, input_ids, mask):
+        return torch.where(
+            mask.unsqueeze(-1),
+            self.embs(torch.zeros_like(input_ids)),
+            self.embs(input_ids+1)
+        )
+
+
 class HLmGenerator(nn.Module):
+
+    input_type = HLmGeneratorInput
+
 
     def __init__(self, config: HLmConfig):
         super().__init__()
@@ -515,23 +547,21 @@ class HLmGenerator(nn.Module):
         self.z_size = config.z_size
         self.num_layers = config.num_layers
 
+        self.input_module = self.input_type(config)
+
         self.layers = nn.ModuleList([
             HLmGeneratorLayer(config, i)
             for i in range(config.num_layers)
         ])
 
-        self.init_input_params(config)
+        self.gradient_checkpointing = False
 
-    
-    def init_input_params(self, config: HLmConfig):
-        self.embs = nn.Embedding(1+config.vocab_size, config.hidden_size)
 
-    def get_hidden_states(self, input_ids, mask):
-        return torch.where(
-            mask.unsqueeze(-1),
-            self.embs(torch.zeros_like(input_ids)),
-            self.embs(input_ids+1)
-        )
+    def init_fsdp(self):
+        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing)
+
+        for i, layer in enumerate(self.layers):
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
 
 
     def forward(
@@ -543,7 +573,7 @@ class HLmGenerator(nn.Module):
     ):
         long_mask = mask.long()
         
-        hidden_states = self.get_hidden_states(input_ids, mask)
+        hidden_states = self.input_module(input_ids, mask)
         bs, seq_len = hidden_states.shape[:2]
 
         # mask out conditionals for uncond sequences
@@ -593,6 +623,15 @@ class HLmDecoder(nn.Module):
         self.lm_head = self.lm_head_type(config)
 
         self.gradient_checkpointing = False
+
+
+    def init_fsdp(self):
+        self.z_proj = apply_fsdp(self.z_proj, self.gradient_checkpointing)
+
+        for i, layer in enumerate(self.layers):
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
+
+        self.lm_head = apply_fsdp(self.lm_head, self.gradient_checkpointing)
 
 
     def forward(
@@ -679,6 +718,14 @@ class HLmModel(XLAModel):
         self.post_init()
 
 
+    def init_fsdp(self):
+        self.encoder.init_fsdp()
+        self.generator.init_fsdp()
+        self.decoder.init_fsdp()
+
+        return apply_fsdp(self, False)
+
+
     def forward(
         self,
         input_ids,
@@ -694,7 +741,7 @@ class HLmModel(XLAModel):
         # sample noise for the encoder
         noise = torch.randn(
             [bs, seq_len, self.num_layers, self.z_size],
-            device=input_ids.device, dtype=self.encoder.embs.weight.dtype
+            device=input_ids.device, dtype=self.encoder.input_module.embs.weight.dtype
         )
 
         # pass through the encoder
@@ -724,6 +771,6 @@ class HLmModel(XLAModel):
         if num_uncond is not None:
             uncond_kl = kl[:num_uncond]
             kl = kl[num_uncond:]
-            return lm_logits, kl, uncond_kl
+            return lm_logits, uncond_kl, kl
 
         return lm_logits, kl

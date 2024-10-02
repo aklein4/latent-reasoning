@@ -7,6 +7,7 @@ from torch_xla.amp import autocast, syncfree
 
 import os
 import numpy as np
+import shutil
 
 import wandb
 import huggingface_hub as hf
@@ -14,7 +15,6 @@ import huggingface_hub as hf
 import utils.constants as constants
 from utils.data_utils import DotDict
 from utils.logging_utils import LogSection, log_print, log_master_print
-from utils.optimization_utils import LowPrecisionAdafactor
 
 
 class BaseXLATrainer:
@@ -42,12 +42,16 @@ class BaseXLATrainer:
         save_name = f"{project}_{name}"
         self.save_repo = f"{constants.HF_ID}/{save_name}"
 
+        if constants.XLA_LOCAL_MAIN() and not self.debug:
+            os.makedirs(constants.LOCAL_DATA_PATH, exist_ok=True)
+        
         if constants.XLA_MAIN() and not self.debug:
             with LogSection("Save Locations Creation"):
+                
                 hf.create_repo(
                     save_name, private=True, exist_ok=True
                 )
-                os.makedirs(constants.LOCAL_DATA_PATH, exist_ok=True)
+                
                 wandb.init(
                     project=project,
                     name=name,
@@ -74,49 +78,60 @@ class BaseXLATrainer:
     @torch.no_grad()
     def save_checkpoint(
         self,
-        models,
+        model,
+        optimizer,
+        lr_scheduler,
         step
     ):
-        if not constants.XLA_MAIN() or self.debug:
+        if self.debug:
             return
-        
-        with LogSection("Saving Checkpoint"):
+
+        xm.rendezvous("Saving checkpoint...")
+
+        # create base checkpoint paths
+        tmp_path = os.path.join(
+            constants.LOCAL_DATA_PATH,
+            "tmp_checkpoint"
+        )
+        ckpt_path = os.path.join(
+            tmp_path,
+            f"rank_{constants.XLA_RANK}.ckpt"
+        )
+
+        if constants.XLA_LOCAL_MAIN():
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            os.makedirs(tmp_path, exist_ok=True)
+
+        ckpt = {
+            "model": model.state_dict(),
+            "shard_metadata": model.get_shard_metadata(),
+        }
+        if self.save_optimizer:
+            ckpt["optimizer"] = optimizer.state_dict(),
+            ckpt["lr_scheduler"] = lr_scheduler.state_dict(),
+
+        xm.save(ckpt, ckpt_path, master_only=False)
+
+        model.config.save_pretrained(tmp_path, push_to_hub=False)
+
+        xm.rendezvous("syncing checkpoint...")
+
+        if constants.XLA_LOCAL_MAIN():
+            out_path = f"{step:012d}"
+            
             api = hf.HfApi()
+            api.upload_folder(
+                repo_id=self.save_repo,
+                folder_path=tmp_path,
+                path_in_repo=out_path,
+                repo_type="model"
+           )
 
-            # create base checkpoint paths
-            tmp_base_path = os.path.join(constants.LOCAL_DATA_PATH, "tmp_checkpoint")
-            out_base_path = f"{step:012d}"
-
-            for name, model in models.items():
-
-                # create paths for this model
-                tmp_path = os.path.join(tmp_base_path, name)
-                out_path = os.path.join(out_base_path, name)
-                os.makedirs(tmp_path, exist_ok=True)
-
-                # try save in config transformers format
-                # try:
-                model.config.save_pretrained(tmp_path, push_to_hub=False)
-                # except:
-                #     log_master_print(f"Warning: {name} config not saved!")
-
-                # try save state locally  
-                # try:
-                xm.save(model.state_dict(), os.path.join(tmp_path, "state_dict.pt"))
-                # except:
-                #     log_master_print(f"ERROR: {name} STATE NOT SAVED!")
-
-                # push to hub
-                api.upload_folder(
-                    repo_id=self.save_repo,
-                    folder_path=tmp_path,
-                    path_in_repo=out_path,
-                    repo_type="model"
-                )
-
+        xm.rendezvous("Checkpoint saved!")
+        
 
     def get_optimizer(self, model):
-        return LowPrecisionAdafactor(
+        return syncfree.AdamW(
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
         )
@@ -167,8 +182,9 @@ class BaseXLATrainer:
         seen_tokens = 0
         step_tracker = xm.RateTracker()
         token_tracker = xm.RateTracker()
-        
+
         # run loop
+        xm.rendezvous("Train!")
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 
@@ -194,37 +210,41 @@ class BaseXLATrainer:
 
             # accumulate gradients and results
             results_accum = DotDict()
-            for mini_batch in mini_batches:
+            for mini_batch_id, mini_batch in enumerate(mini_batches):
 
                 # get results from train step
-                with autocast(constants.XLA_DEVICE()):
-                    results = self.train_step(
-                        curr_step,
-                        model,
-                        *mini_batch
-                    )
+                
+                # fsdp handles autocast
+                # with autocast(constants.XLA_DEVICE()):
+                results = self.train_step(
+                    curr_step,
+                    model,
+                    *mini_batch
+                )
 
-                    # scale results for accumulation
-                    # reductions are done by averaging across devices, summing across mini batches
+                # scale results for accumulation
+                # reductions are done by averaging across devices, summing across mini batches
+                for k, v in results.items():
+                    results[k] = v / num_mini_batches
+
+                # sum results
+                with torch.no_grad():
                     for k, v in results.items():
-                        results[k] = v / num_mini_batches
-
-                    # sum results
-                    with torch.no_grad():
-                        for k, v in results.items():
-                            if k not in results_accum:
-                                results_accum[k] = 0.0
-                            results_accum[k] = results_accum[k] + v.detach()
+                        if k not in results_accum:
+                            results_accum[k] = 0.0
+                        results_accum[k] = results_accum[k] + v.detach()
                 
                 # gradient reduction is done by averaging across devices, summing across mini batches
                 results.loss.backward()
 
                 # mark step if using gradient accumulation
-                if len(results_accum) > 1:
+                if len(results_accum) > 1 and mini_batch_id < num_mini_batches - 1:
                     xm.mark_step()
 
             # perform a single optimizer step
-            xm.optimizer_step(optimizer)
+            if self.clip_grad_norm is not None:
+                model.clip_grad_norm_(self.clip_grad_norm)
+            optimizer.step()
             optimizer.zero_grad(set_to_none=(num_mini_batches == 1))
 
             # update lr
@@ -235,6 +255,7 @@ class BaseXLATrainer:
             curr_step += 1
             step_tracker.add(1)
             self.log.steps_completed = curr_step
+            
             seen_tokens += self.bs * self.sequence_length
             token_tracker.add(self.bs * self.sequence_length)
             self.log.seen_tokens = seen_tokens
@@ -259,24 +280,20 @@ class BaseXLATrainer:
                 # save
                 self.log_step()
                 if curr_step % self.checkpoint_interval == 0:
-                    # try:
-                        self.save_checkpoint(
-                            {'model': model},
-                            curr_step
-                        )
-                    # except:
-                    #     log_master_print("Warning: checkpoint save failed!")
+                    self.save_checkpoint(
+                        model,
+                        optimizer,
+                        curr_step
+                    )
             
             # add closure
             xm.add_step_closure(_post_step)
 
-        # try:
         self.save_checkpoint(
-            {'model': model},
+            model,
+            optimizer,
             curr_step
         )
-        # except:
-        #     log_master_print("Warning: final checkpoint save failed!")
     
 
     def train_step(
@@ -296,3 +313,4 @@ class BaseXLATrainer:
             DotDict: result tensors containing 'loss' key
         """
         raise NotImplementedError("train_step must be implemented in child class!")
+    

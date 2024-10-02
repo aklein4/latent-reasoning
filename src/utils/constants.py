@@ -18,14 +18,20 @@ BASE_PATH = os.path.dirname( # src
 # device of current process
 XLA_DEVICE = lambda: xm.xla_device()
 
-# id of the current device
-XLA_DEVICE_ID = lambda: xm.get_ordinal()
+# local id of the current device
+XLA_LOCAL_RANK = lambda: xm.get_local_ordinal()
 
-# number of devices
-NUM_XLA_DEVICES = lambda: xm.xrt_world_size()
+# id of the current device
+XLA_RANK = lambda: xm.get_ordinal()
+
+# whether this is the main process on its device
+XLA_LOCAL_MAIN = lambda: xm.is_master_ordinal(local=True)
 
 # whether this is the main process
 XLA_MAIN = lambda: xm.is_master_ordinal(local=False)
+
+# number of devices
+NUM_XLA_DEVICES = lambda: xm.xrt_world_size()
 
 # local data path
 LOCAL_DATA_PATH = os.path.join(BASE_PATH, "local_data")

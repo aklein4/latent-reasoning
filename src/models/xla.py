@@ -1,14 +1,9 @@
 import torch
-try:
-    from torch_xla.utils.checkpoint import checkpoint as xla_checkpoint_fn
-except ImportError:
-    pass
-
-import functools
 
 from transformers.modeling_utils import PretrainedConfig, PreTrainedModel
 
 from utils.logging_utils import log_print
+from utils.model_utils import apply_fsdp
 import utils.constants as constants
 
 
@@ -77,8 +72,7 @@ class XLAModel(PreTrainedModel):
             raise ValueError(f"{self.__class__.__name__} does not support gradient checkpointing.")
         
         if constants.XLA_AVAILABLE:
-            gradient_checkpointing_func = functools.partial(xla_checkpoint_fn, **gradient_checkpointing_kwargs)
-            self._set_gradient_checkpointing(enable=True, gradient_checkpointing_func=gradient_checkpointing_func)
+            self._set_gradient_checkpointing(enable=True, gradient_checkpointing_func=None)
             
             log_print(f"Gradient checkpointing enabled for {self.__class__.__name__}")
 
@@ -94,3 +88,7 @@ class XLAModel(PreTrainedModel):
             return
 
         super().init_weights()
+
+    
+    def init_fsdp(self):
+        return apply_fsdp(self, False)

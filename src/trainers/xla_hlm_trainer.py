@@ -65,12 +65,12 @@ class XLAHLmTrainer(BaseXLATrainer):
     def train_step(self, step, model, x, mask):
         bs, seq_len = x.shape
         
-        cond_x = x[self.num_uncond:]
         uncond_x = x[:self.num_uncond]
-        cond_mask = mask[self.num_uncond:]
+        cond_x = x[self.num_uncond:]
         uncond_mask = mask[:self.num_uncond]
+        cond_mask = mask[self.num_uncond:]
 
-        logits, cond_kl, uncond_kl = model(x, mask, num_uncond=self.num_uncond)
+        logits, uncond_kl, cond_kl = model(x, mask, num_uncond=self.num_uncond)
         kl = torch.cat([uncond_kl, cond_kl], dim=0)
 
         # log probs, with zero for unmasked tokens
@@ -79,7 +79,6 @@ class XLAHLmTrainer(BaseXLATrainer):
         ar_seq = ar % seq_len
         log_probs = logits[ar_bs, ar_seq, x.view(-1)].view(*x.shape)
         log_probs = torch.where(mask, log_probs, torch.zeros_like(log_probs))
-        log_probs = log_probs.to(kl.dtype)
 
         # current version is raw logit clipping
         kl_clip = self.kl_per_token(cond_kl, cond_mask) > self.kl_threshold

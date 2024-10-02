@@ -4,9 +4,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+try:
+    from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
+except:
+    pass
+
 import numpy as np
 
 from transformers.activations import ACT2FN
+
+
+def apply_fsdp(module, gradient_checkpointing=False):
+    return FSDP(
+        checkpoint_module(module) if gradient_checkpointing else module,
+        reshard_after_forward=True,
+        flatten_parameters=True,
+        execute_sharding_on_init=True,
+        optimization_barrier_in_forward=False,
+        optimization_barrier_in_backward=False,
+        mark_step_on_finalization=False,
+        disable_reshard_on_root=True,
+        compute_dtype=torch.bfloat16,
+        buffer_dtype=torch.bfloat16,
+        fp32_reduce_scatter=False,
+    )
 
 
 class ReZeroIO(nn.Module):

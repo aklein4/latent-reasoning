@@ -23,7 +23,7 @@ def _mp_fn(index, args):
 
     # debug info
     log_print(
-        f"Local Ordinal: {xm.get_local_ordinal()}, Local Master: {xm.is_master_ordinal(local=True)}, Master: {xm.is_master_ordinal(local=False)}, World Size: {xm.xrt_world_size()}"
+        f"Local Ordinal: {constants.XLA_LOCAL_RANK},Ordinal: {constants.XLA_RANK}, Local Master: {constants.XLA_LOCAL_MAIN}, Master: {constants.XLA_MAIN}, World Size: {constants.NUM_XLA_DEVICES}"
     )
 
     log_print("Loading configs...")
@@ -37,15 +37,18 @@ def _mp_fn(index, args):
     model_type = model_config.pop("model_type")
     model_type_config = CONFIG_DICT[model_type](**model_config)
     model = MODEL_DICT[model_type](model_type_config)
+    model = model.init_fsdp()
+    xm.rendezvous("Model Loaded!")
 
-    model = model.to(constants.XLA_DEVICE())
-    if not args.debug:
-        log_print("Syncing model...")
+    """ FSDP handles this """
+    # model = model.to(constants.XLA_DEVICE())
+    # if not args.debug:
+    #     log_print("Syncing model...")
 
-        # broadcast with bfloat16 for speed
-        model = model.to(torch.bfloat16)
-        xm.broadcast_master_param(model)
-        model = model.to(torch.float32)
+    #     # broadcast with bfloat16 for speed
+    #     model = model.to(torch.bfloat16)
+    #     xm.broadcast_master_param(model)
+    #     model = model.to(torch.float32)
 
     log_print("Loading data...")
     loader = get_loader(
@@ -58,8 +61,9 @@ def _mp_fn(index, args):
         },
         train_config["stream_dataset"]
     )
+    xm.rendezvous("Data Loaded!")
 
-    log_print("Train!")
+    log_print("Loading trainer...")
     trainer_type = train_config["trainer_type"]
     trainer = TRAINER_DICT[trainer_type](
         args.project,
@@ -67,6 +71,8 @@ def _mp_fn(index, args):
         train_config,
         debug=args.debug
     )
+    xm.rendezvous("Trainer Loaded!")
+
     trainer.train(
         model,
         loader
