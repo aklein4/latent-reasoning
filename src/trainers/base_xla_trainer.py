@@ -86,6 +86,7 @@ class BaseXLATrainer:
             return
 
         xm.rendezvous("creating checkpoint directories...")
+        log_master_print("saving checkpoint...")
 
         # create base checkpoint paths
         tmp_path = os.path.join(
@@ -102,6 +103,7 @@ class BaseXLATrainer:
             os.makedirs(tmp_path, exist_ok=True)
 
         xm.rendezvous("saving checkpoint...")
+        log_master_print("saving checkpoint...")
 
         ckpt = {
             "model": model.state_dict(),
@@ -116,6 +118,7 @@ class BaseXLATrainer:
         model.config.save_pretrained(tmp_path, push_to_hub=False)
 
         xm.rendezvous("syncing checkpoint...")
+        log_master_print("syncing checkpoint...")
 
         if constants.XLA_LOCAL_MAIN():
             out_path = f"{step:012d}"
@@ -129,6 +132,7 @@ class BaseXLATrainer:
            )
 
         xm.rendezvous("Checkpoint saved!")
+        log_master_print("Checkpoint saved!")
         
 
     def get_optimizer(self, model):
@@ -186,6 +190,7 @@ class BaseXLATrainer:
 
         # run loop
         xm.rendezvous("Train!")
+        log_master_print("Train!")
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 

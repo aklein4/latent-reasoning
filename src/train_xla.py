@@ -39,6 +39,7 @@ def _mp_fn(index, args):
     model = MODEL_DICT[model_type](model_type_config)
     model = model.init_fsdp()
     xm.rendezvous("Model Loaded!")
+    log_master_print("Model Loaded!")
 
     """ FSDP handles this """
     # model = model.to(constants.XLA_DEVICE())
@@ -62,6 +63,7 @@ def _mp_fn(index, args):
         train_config["stream_dataset"]
     )
     xm.rendezvous("Data Loaded!")
+    log_master_print("Data Loaded!")
 
     log_print("Loading trainer...")
     trainer_type = train_config["trainer_type"]
@@ -72,6 +74,7 @@ def _mp_fn(index, args):
         debug=args.debug
     )
     xm.rendezvous("Trainer Loaded!")
+    log_master_print("Trainer Loaded!")
 
     trainer.train(
         model,
