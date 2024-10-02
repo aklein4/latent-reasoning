@@ -268,7 +268,7 @@ class BaseXLATrainer:
 
                 # log
                 for k, v in results_accum.items():
-                    r = xm.mesh_reduce(f"{k}_reduce", v.item(), np.sum, scale=1/constants.NUM_XLA_DEVICES())
+                    r = xm.mesh_reduce(f"{k}_reduce", v.item(), np.mean)
                     self.log[k] = r
 
                 # print update
