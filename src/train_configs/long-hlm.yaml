@@ -23,8 +23,7 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.1
 
-    grad_clipping: true
-    max_norm: 1.0
+clip_grad_norm: 1.0
 
 kl_w: 1.0
 token_w: 50.0
