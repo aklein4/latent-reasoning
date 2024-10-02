@@ -51,12 +51,12 @@ class BaseXLATrainer:
                 
                 os.makedirs(constants.LOCAL_DATA_PATH, exist_ok=True)
 
+
+                wandb.tensorboard.patch(root_logdir="~/tensorboard")
                 wandb.init(
                     project=project,
                     name=name,
                     config=config,
-                    tensorboard=True,
-                    sync_tensorboard=True
                 )
 
         # apply hyperparams
