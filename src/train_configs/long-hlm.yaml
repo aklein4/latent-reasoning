@@ -11,7 +11,9 @@ mini_bs: 64
 
 warmup_steps: 4000
 lr_steps: 40000
+
 checkpoint_interval: 5 # 5000
+save_optimizer: true
 
 start_lr: 0.0003
 end_lr: 0.00003

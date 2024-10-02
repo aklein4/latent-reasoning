@@ -73,7 +73,6 @@ class BaseXLATrainer:
         self.log = DotDict()
         
 
-
     @torch.no_grad()
     def save_checkpoint(
         self,
