@@ -659,7 +659,6 @@ class HLmDecoder(nn.Module):
                 attn_mask
             )
         
-        
         lm_logits = self.lm_head(hidden_states)
 
         return lm_logits

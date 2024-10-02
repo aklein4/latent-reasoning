@@ -25,7 +25,7 @@ clip_grad_norm: 1.0
 kl_w: 1.0
 token_w: 50.0
 
-clip_kl: 10.0
+kl_threshold: 10.0
 clip_prob: 0.75
 
 num_uncond: 4
