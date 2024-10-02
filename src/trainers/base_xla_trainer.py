@@ -158,7 +158,8 @@ class BaseXLATrainer:
         loader
     ):
         import torch_xla.debug.profiler as xp
-        server = xp.start_server(9012)
+        if constants.XLA_MAIN():
+            server = xp.start_server(9012)
 
         # init model
         for p in model.parameters():
