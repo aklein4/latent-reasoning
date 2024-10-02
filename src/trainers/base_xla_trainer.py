@@ -179,7 +179,6 @@ class BaseXLATrainer:
         # run loop
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
-            with xp.StepTrace('Training_step', step_num=curr_step, disable=(not constants.XLA_MAIN())): 
 
                 if curr_step == 10 and constants.XLA_MAIN():
                     wandb.finish()
@@ -210,27 +209,29 @@ class BaseXLATrainer:
                 for mini_batch in mini_batches:
 
                     # get results from train step
-                    with autocast(constants.XLA_DEVICE()):
-                        results = self.train_step(
-                            curr_step,
-                            model,
-                            *mini_batch
-                        )
+                    with xp.Trace('loss', disable=(not constants.XLA_MAIN())): 
+                        with autocast(constants.XLA_DEVICE()):
+                            results = self.train_step(
+                                curr_step,
+                                model,
+                                *mini_batch
+                            )
 
-                        # scale results for accumulation
-                        # reductions are done by averaging across devices, summing across mini batches
-                        for k, v in results.items():
-                            results[k] = v / num_mini_batches
-
-                        # sum results
-                        with torch.no_grad():
+                            # scale results for accumulation
+                            # reductions are done by averaging across devices, summing across mini batches
                             for k, v in results.items():
-                                if k not in results_accum:
-                                    results_accum[k] = 0.0
-                                results_accum[k] = results_accum[k] + v.detach()
-                    
+                                results[k] = v / num_mini_batches
+
+                            # sum results
+                            with torch.no_grad():
+                                for k, v in results.items():
+                                    if k not in results_accum:
+                                        results_accum[k] = 0.0
+                                    results_accum[k] = results_accum[k] + v.detach()
+                        
                     # gradient reduction is done by averaging across devices, summing across mini batches
-                    results.loss.backward()
+                    with xp.Trace('backward', disable=(not constants.XLA_MAIN())):
+                        results.loss.backward()
 
                     # mark step if using gradient accumulation
                     if len(results_accum) > 1:
