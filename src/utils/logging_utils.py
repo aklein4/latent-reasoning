@@ -13,7 +13,7 @@ def log_print(x):
     Args:
         x: message to print
     """
-    print(f"Device {constants.XLA_DEVICE_ID()}: {x}", flush=True)
+    print(f"Device {constants.XLA_RANK()}: {x}", flush=True)
 
 
 def log_master_print(x):

@@ -23,7 +23,7 @@ def _mp_fn(index, args):
 
     # debug info
     log_print(
-        f"Local Ordinal: {constants.XLA_LOCAL_RANK},Ordinal: {constants.XLA_RANK}, Local Master: {constants.XLA_LOCAL_MAIN}, Master: {constants.XLA_MAIN}, World Size: {constants.NUM_XLA_DEVICES}"
+        f"Local Ordinal: {constants.XLA_LOCAL_RANK}, Ordinal: {constants.XLA_RANK}, Local Master: {constants.XLA_LOCAL_MAIN}, Master: {constants.XLA_MAIN}, World Size: {constants.NUM_XLA_DEVICES}"
     )
 
     log_print("Loading configs...")
