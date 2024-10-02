@@ -185,7 +185,7 @@ class BaseXLATrainer:
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 
-                if curr_step == 100 and constants.XLA_MAIN():
+                if curr_step == 300 and constants.XLA_MAIN():
                     wandb.finish()
                     raise ValueError("STOPPING")
 
