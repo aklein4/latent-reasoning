@@ -163,7 +163,7 @@ class BaseXLATrainer:
             xp.trace_detached(
                 f'localhost:{9012}',
                 "~/tensorboard",
-                duration_ms=120
+                duration_ms=120000
             )
 
         # init model
