@@ -87,7 +87,6 @@ def get_loader(
         collate_fn=collator,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=True,
     )
 
     if not constants.XLA_AVAILABLE:
