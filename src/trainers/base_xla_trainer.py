@@ -162,7 +162,7 @@ class BaseXLATrainer:
             server = xp.start_server(9012)
             xp.trace_detached(
                 f'localhost:{9012}',
-                "~/tensorboard"
+                "~/tensorboard",
                 duration_ms=120
             )
 
