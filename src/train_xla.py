@@ -39,7 +39,6 @@ def _mp_fn(index, args):
     model = MODEL_DICT[model_type](model_type_config)
     model = model.init_fsdp()
     xm.rendezvous("Model Loaded!")
-    log_master_print(f"{[p.shape for p in model.parameters()]}")
     log_master_print("Model Loaded!")
 
     """ FSDP handles this """

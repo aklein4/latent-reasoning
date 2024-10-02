@@ -4,7 +4,6 @@ import torch
 
 import torch_xla.core.xla_model as xm
 from torch_xla.amp import autocast, syncfree
-from torch_xla.distributed.zero_redundancy_optimizer import ZeroRedundancyOptimizer
 
 import os
 import numpy as np
@@ -135,10 +134,8 @@ class BaseXLATrainer:
         
 
     def get_optimizer(self, model):
-        return ZeroRedundancyOptimizer(
-            model.parameters(),
-            optimizer_class=torch.optim.AdamW,
-            lr=self.start_lr,
+        return syncfree.AdamW(
+            model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
         )
 
@@ -249,6 +246,8 @@ class BaseXLATrainer:
                     xm.mark_step()
 
             # perform a single optimizer step
+            if self.clip_grad_norm is not None:
+                model.clip_grad_norm_(self.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=(num_mini_batches == 1))
 
@@ -269,7 +268,7 @@ class BaseXLATrainer:
 
                 # log
                 for k, v in results_accum.items():
-                    r = xm.mesh_reduce(f"{k}_reduce", v.item(), np.mean)
+                    r = xm.mesh_reduce(f"{k}_reduce", v.item(), np.sum, scale=1/constants.NUM_XLA_DEVICES())
                     self.log[k] = r
 
                 # print update
