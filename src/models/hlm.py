@@ -654,25 +654,13 @@ class HLmDecoder(nn.Module):
 
         for i, layer in enumerate(self.layers):
             
-            if self.gradient_checkpointing and constants.XLA_AVAILABLE:
-                hidden_states = self._gradient_checkpointing_func(
-                    layer.__call__,
-                    hidden_states,
-                    attn_mask
-                )
-            else:
-                hidden_states = layer(
-                    hidden_states,
-                    attn_mask
-                )
-        
-        if self.gradient_checkpointing and constants.XLA_AVAILABLE:
-            lm_logits = self._gradient_checkpointing_func(
-                self.lm_head.__call__,
-                hidden_states
+            hidden_states = layer(
+                hidden_states,
+                attn_mask
             )
-        else:
-            lm_logits = self.lm_head(hidden_states)
+        
+        
+        lm_logits = self.lm_head(hidden_states)
 
         return lm_logits
 
