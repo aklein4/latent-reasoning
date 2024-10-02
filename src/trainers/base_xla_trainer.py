@@ -85,7 +85,7 @@ class BaseXLATrainer:
             return
 
         xm.rendezvous("creating checkpoint directories...")
-        log_master_print("saving checkpoint...")
+        log_master_print("creating checkpoint paths...")
 
         # create base checkpoint paths
         tmp_path = os.path.join(
@@ -94,7 +94,7 @@ class BaseXLATrainer:
         )
         ckpt_path = os.path.join(
             tmp_path,
-            f"rank_{constants.XLA_RANK}.ckpt"
+            f"rank_{constants.XLA_RANK()}.ckpt"
         )
 
         if constants.XLA_LOCAL_MAIN():
@@ -111,7 +111,6 @@ class BaseXLATrainer:
         if self.save_optimizer:
             ckpt["optimizer"] = optimizer.state_dict(),
             ckpt["lr_scheduler"] = lr_scheduler.state_dict(),
-
         xm.save(ckpt, ckpt_path, master_only=False)
 
         model.config.save_pretrained(tmp_path, push_to_hub=False)
