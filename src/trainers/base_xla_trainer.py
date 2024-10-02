@@ -178,7 +178,7 @@ class BaseXLATrainer:
         # run loop
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
-            with xp.StepTrace('Training_step', step_num=curr_step): 
+            with xp.StepTrace('Training_step', step_num=curr_step, disable=(not constants.XLA_MAIN())): 
 
                 if curr_step == 10 and constants.XLA_MAIN():
                     wandb.finish()
