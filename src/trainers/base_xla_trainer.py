@@ -137,7 +137,7 @@ class BaseXLATrainer:
     def get_optimizer(self, model):
         return ZeroRedundancyOptimizer(
             model.parameters(),
-            optimizer_class=torch.optim.AdamW
+            optimizer_class=torch.optim.AdamW,
             lr=self.start_lr,
             **self.optimizer_kwargs
         )
