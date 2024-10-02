@@ -14,7 +14,7 @@ num_attention_heads: 12
 num_iaf_attention_heads: 4
 num_registers: 0
 
-num_layers: 48
+num_layers: 40
 num_decoder_layers: 8
 
 hidden_act: silu
@@ -29,4 +29,4 @@ z_mlp_mult: 2
 z_output_layers: 4
 reverse_z: true
 
-gradient_checkpointing: false
+gradient_checkpointing: true
