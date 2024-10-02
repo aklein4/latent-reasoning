@@ -67,12 +67,11 @@ class BaseXLATrainer:
 
 
     def log_step(self):
-        if not constants.XLA_MAIN() or self.debug:
-            return
+        if constants.XLA_MAIN() and not self.debug:
+            wandb.log(self.log.to_dict())
         
-        # save and clear log
-        wandb.log(self.log.to_dict())
         self.log = DotDict()
+        
 
 
     @torch.no_grad()
@@ -86,7 +85,7 @@ class BaseXLATrainer:
         if self.debug:
             return
 
-        xm.rendezvous("Saving checkpoint...")
+        xm.rendezvous("creating checkpoint directories...")
 
         # create base checkpoint paths
         tmp_path = os.path.join(
@@ -101,6 +100,8 @@ class BaseXLATrainer:
         if constants.XLA_LOCAL_MAIN():
             shutil.rmtree(tmp_path, ignore_errors=True)
             os.makedirs(tmp_path, exist_ok=True)
+
+        xm.rendezvous("saving checkpoint...")
 
         ckpt = {
             "model": model.state_dict(),
