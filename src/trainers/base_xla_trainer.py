@@ -289,6 +289,7 @@ class BaseXLATrainer:
                     self.save_checkpoint(
                         model,
                         optimizer,
+                        lr_scheduler,
                         curr_step
                     )
             
@@ -298,6 +299,7 @@ class BaseXLATrainer:
         self.save_checkpoint(
             model,
             optimizer,
+            lr_scheduler,
             curr_step
         )
     
