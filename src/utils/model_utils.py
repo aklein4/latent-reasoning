@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 try:
     from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
-    from torch_xla.experimental.custom_kernel import flash_attention
+    from utils.custom_kernel import flash_attention
 except:
     pass
 
