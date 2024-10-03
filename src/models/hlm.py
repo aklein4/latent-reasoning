@@ -198,7 +198,7 @@ class HLmEncoderLayer(nn.Module):
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            8 if (config.num_registers == 0) else config.num_registers,
+            True,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -315,7 +315,7 @@ class HLmGeneratorLayer(nn.Module):
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            config.num_registers,
+            False,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -399,7 +399,7 @@ class HLmDecoderLayer(nn.Module):
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            config.num_registers,
+            False,
             True,
             config.rope_fraction,
             config.max_sequence_length,

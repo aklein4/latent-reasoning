@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 try:
     from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
-    # from torch_xla.
+    from torch_xla.experimental.custom_kernel import flash_attention
 except:
     pass
 
@@ -14,8 +14,23 @@ import numpy as np
 
 from transformers.activations import ACT2FN
 
+import utils.constants as constants
 
-def apply_fsdp(module, gradient_checkpointing=False):
+
+def apply_fsdp(
+    module: nn.Module,
+    gradient_checkpointing: Optional[bool]=False
+) -> nn.Module:
+    """ Apply fully sharded parallelism to a module,
+    with optional gradient checkpointing and tuned settings.
+
+    Args:
+        module (torch.nn.Module): Module to apply FSDP to
+        gradient_checkpointing (bool, optional): Whether to use gradient checkpointing. Defaults to False.
+
+    Returns:
+        nn.Module: Module with FSDP applied
+    """
     return FSDP(
         checkpoint_module(module) if gradient_checkpointing else module,
         reshard_after_forward=True,
@@ -45,7 +60,7 @@ class ReZeroIO(nn.Module):
             eps (float, optional): epsilon for normalization. Defaults to 1e-5.
         """
         super().__init__()
-        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps, elementwise_affine=True)
         self.filter = nn.Parameter(torch.zeros(1, 1, hidden_size))
 
 
@@ -122,7 +137,7 @@ class FusedLinear(nn.Module):
         self.use_mask = mask is not None
         if self.use_mask:
             assert mask.shape == self.linear.weight.shape, f'mask shape {mask.shape} does not match weight shape {self.linear.weight.shape}'
-            self.register_buffer('mask', mask)
+            self.register_buffer('mask', mask, persistent=False)
 
 
     def _error_message(
@@ -187,7 +202,7 @@ class RotaryAttention(nn.Module):
         self,
         attention_head_size,
         num_attention_heads,
-        num_registers,
+        use_register,
         use_rope,
         rope_fraction,
         max_sequence_length,
@@ -214,14 +229,21 @@ class RotaryAttention(nn.Module):
         else:
             self.rope = None
 
-        self.num_registers = num_registers
-        if self.num_registers > 0:
-            self.k_registers = nn.Parameter(
-                torch.randn(1, self.num_heads, self.num_registers, self.head_dim)
+        self.use_register = use_register
+        if self.use_register:
+
+            self.k_register = nn.Parameter(
+                torch.randn(1, self.num_heads, 1, self.head_dim)
             )
-            self.v_registers = nn.Parameter(
-                torch.randn(1, self.num_heads, self.num_registers, self.head_dim)
+            self.v_register = nn.Parameter(
+                torch.randn(1, self.num_heads, 1, self.head_dim)
             )
+
+            # mask out the portion of the key that uses positional information
+            register_mask = torch.ones(1, self.num_heads, 1, self.head_dim)
+            if use_rope:
+                register_mask[:, :, :, :self.head_dim//rope_fraction] = 0
+            self.register_buffer('register_mask', register_mask, persistent=False)
 
 
     def forward(
@@ -229,11 +251,11 @@ class RotaryAttention(nn.Module):
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        position_ids=None,
-        attention_mask=None,
-        past_key_value=None,
         q_position_ids=None,
-        k_position_ids=None
+        k_position_ids=None,
+        attention_mask=None,
+        registered_mask=False,
+        past_key_value=None,
     ):
         # get shapes
         bsz, q_len, _ = query_states.shape
@@ -245,33 +267,51 @@ class RotaryAttention(nn.Module):
         # apply rope
         if self.use_rope:
 
-            if (q_position_ids is not None) or (k_position_ids is not None):
-                assert position_ids is None, 'cannot use both position_ids and q/k_position_ids'
+            if query_states.shape[2] == key_states.shape[2]:
+                qk = torch.cat((query_states, key_states), dim=0)
 
-                query_states = self.rope(query_states, q_position_ids)
-                key_states = self.rope(key_states, k_position_ids)
+                if q_position_ids is not None or k_position_ids is not None:
+                    if q_position_ids is None:
+                        q_position_ids = torch.arange(qk.shape[2], device=qk.device, dtype=torch.long)[None].expand(bsz, -1)
+                    if k_position_ids is None:
+                        k_position_ids = torch.arange(qk.shape[2], device=qk.device, dtype=torch.long)[None].expand(bsz, -1)
+
+                    position_qk = torch.cat((q_position_ids, k_position_ids), dim=0)
+                else:
+                    position_qk = None
+
+                query_states, key_states = self.rope(qk, position_qk).chunk(2, dim=0)
             
             else:
-                query_states = self.rope(query_states, position_ids)
-                key_states = self.rope(key_states, position_ids)
+                query_states = self.rope(query_states, q_position_ids)
+                key_states = self.rope(key_states, k_position_ids)
 
         # update/apply cache
         if past_key_value is not None:
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx)
 
         # apply registers
-        if self.num_registers > 0:
-            key_states = torch.cat((key_states, self.k_registers.expand(bsz, -1, -1, -1)), dim=2)
-            value_states = torch.cat((value_states, self.v_registers.expand(bsz, -1, -1, -1)), dim=2)
+        if self.use_register:
+            k_reg_token = (self.k_register * self.register_mask).expand(bsz, -1, -1, -1)
+            v_reg_token = (self.v_register).expand(bsz, -1, -1, -1)
 
-            if attention_mask is not None:
+            key_states = torch.cat((key_states, k_reg_token), dim=2)
+            value_states = torch.cat((value_states, v_reg_token), dim=2)
+
+            if attention_mask is not None and not registered_mask:
                 attention_mask = torch.cat(
                     [
                         attention_mask,
-                        torch.zeros(*attention_mask.shape[:-1], self.num_registers, dtype=attention_mask.dtype, device=attention_mask.device)
+                        torch.zeros(*attention_mask.shape[:-1], 1, dtype=attention_mask.dtype, device=attention_mask.device)
                     ],
                     dim=-1
                 )
+
+        if constants.XLA_AVAILABLE:
+            return flash_attention(
+                query_states, key_states, value_states,
+                ab=attention_mask
+            )
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / np.sqrt(self.head_dim)
         if attention_mask is not None:
@@ -318,8 +358,8 @@ class RotaryEmbedding(nn.Module):
         sin = freqs.sin().contiguous()
         cos = freqs.cos().contiguous()
         
-        self.register_buffer('sin_emb', sin, persistent=True)
-        self.register_buffer('cos_emb', cos, persistent=True)
+        self.register_buffer('sin_emb', sin, persistent=False)
+        self.register_buffer('cos_emb', cos, persistent=False)
 
 
     def _get_sin_cos(self, x, position_ids):
