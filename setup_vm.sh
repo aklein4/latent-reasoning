@@ -16,10 +16,13 @@ Example:
 python -m pip install pip --upgrade
 
 # install torch stuff
-pip install torch~=2.3.0 torch_xla[tpu]~=2.3.0 -f https://storage.googleapis.com/libtpu-releases/index.html
+pip install torch~=2.4.0 torch_xla[tpu]~=2.4.0 -f https://storage.googleapis.com/libtpu-releases/index.html
 
 # update path
 export PATH="/home/$USER/.local/bin:$PATH"
+
+# install jax for flash attention
+pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # install extras
 pip install transformers datasets webdataset wandb matplotlib

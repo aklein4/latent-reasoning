@@ -13,7 +13,7 @@ MODEL_CONFIG = 'test-hlm'
 def main():
 
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(constants.GPT2_TOKENIZER, resume_download=None)
+    tokenizer = AutoTokenizer.from_pretrained(constants.GPT2_TOKENIZER, resume_download=None, clean_up_tokenization_spaces=False)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     assert len(tokenizer) == constants.GPT2_VOCAB_SIZE
     assert tokenizer.pad_token_id == constants.GPT2_PAD_TOKEN
