@@ -7,8 +7,9 @@ import torch
 import torch_xla
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.spmd as xs
+import torch_xla.debug.metrics as met
 
-from typing import Any, List, Callable, Optional
+from typing import Any, List, Callable, Optional, Tuple, Dict
 from torch.library import impl
 from torch_xla.core.xla_model import XLA_LIB
 
@@ -61,14 +62,12 @@ def convert_torch_dtype_to_jax(dtype: torch.dtype) -> "jnp.dtype":
   # in the global scope which could cause problems for xmp.spawn.
   jax_import_guard()
   import jax.numpy as jnp
-
+  if _XLA_USE_BF16:
+    raise RuntimeError(
+        "Pallas kernel does not support XLA_USE_BF16, please unset the env var")
   if dtype == torch.float32:
-    if _XLA_USE_BF16:
-      return jnp.bfloat16
     return jnp.float32
   elif dtype == torch.float64:
-    if _XLA_USE_BF16:
-      return jnp.bfloat16
     return jnp.float64
   elif dtype == torch.float16:
     return jnp.float16
@@ -98,10 +97,14 @@ def to_jax_shape_dtype_struct(tensor: torch.Tensor) -> "jax.ShapeDtypeStruct":
                               convert_torch_dtype_to_jax(tensor.dtype))
 
 
+trace_pallas_arg_to_payload: Dict[Tuple[Any], str] = {}
+
+
 def trace_pallas(kernel: Callable,
                  *args,
                  static_argnums=None,
                  static_argnames=None,
+                 use_cache=False,
                  **kwargs):
   # Import JAX within the function such that we don't need to call the jax_import_guard()
   # in the global scope which could cause problems for xmp.spawn.
@@ -121,11 +124,29 @@ def trace_pallas(kernel: Callable,
     else:
       jax_args.append(arg)
 
+  hash_key = ()
+  if use_cache:
+    global trace_pallas_arg_to_payload
+    # implcit assumption here that everything in kwargs is hashable and not a tensor,
+    # which is true for the gmm and tgmm.
+    hash_key = (jax.config.jax_default_matmul_precision, kernel, static_argnums,
+                tuple(static_argnames)
+                if static_argnames is not None else static_argnames,
+                tuple(jax_args), repr(sorted(kwargs.items())).encode())
+    if hash_key in trace_pallas_arg_to_payload:
+      torch_xla._XLAC._xla_increment_counter('trace_pallas_cache_hit', 1)
+      return trace_pallas_arg_to_payload[hash_key], tensor_args
+
   # Here we ignore the kwargs for execution as most of the time, the kwargs is only used in traced code.
   ir = jax.jit(
       kernel, static_argnums=static_argnums,
       static_argnames=static_argnames).lower(*jax_args, **kwargs).compiler_ir()
   payload = _extract_backend_config(ir)
+
+  if use_cache:
+    # if we reach here it means we have a cache miss.
+    trace_pallas_arg_to_payload[hash_key] = payload
+
   return payload, tensor_args
 
 
@@ -204,7 +225,7 @@ class FlashAttention(torch.autograd.Function):
     return segment_ids, q_segment_ids, kv_segment_ids
 
   @staticmethod
-  def forward(ctx, q, k, v, causal, q_segment_ids, kv_segment_ids, sm_scale,
+  def forward(ctx, q, k, v, causal, q_segment_ids, kv_segment_ids, sm_scale, ab,
               partition_spec, mesh):
     # Import JAX within the function such that we don't need to call the jax_import_guard()
     # in the global scope which could cause problems for xmp.spawn.
@@ -224,11 +245,15 @@ class FlashAttention(torch.autograd.Function):
     full_q = q
     full_k = k
     full_v = v
+    full_ab = ab
     if partition_spec is not None:
       ctx.full_shape = q.shape
       q = xs.enable_manual_sharding(q, partition_spec, mesh=mesh).global_tensor
       k = xs.enable_manual_sharding(k, partition_spec, mesh=mesh).global_tensor
       v = xs.enable_manual_sharding(v, partition_spec, mesh=mesh).global_tensor
+      if ab:
+        ab = xs.enable_manual_sharding(
+            ab, partition_spec, mesh=mesh).global_tensor
 
     # It computes the shape and type of o, l, m.
     shapes = [q.shape]
@@ -254,7 +279,7 @@ class FlashAttention(torch.autograd.Function):
           q,
           k,
           v,
-          None,
+          ab,
           segment_ids,
           save_residuals,
           causal,
@@ -264,9 +289,13 @@ class FlashAttention(torch.autograd.Function):
           min(FlashAttention.DEFAULT_BLOCK_SIZES["block_k_major"], k.shape[2]),
           min(FlashAttention.DEFAULT_BLOCK_SIZES["block_k"], k.shape[2]),
           False,
-          static_argnums=range(5, 13))
+          static_argnums=range(5, 13),
+          use_cache=True,
+      )
 
       args = [q, k, v]
+      if ab is not None:
+        args += [ab]
       if segment_ids is not None:
         args += [q_segment_ids, kv_segment_ids]
       o = torch_xla._XLAC._xla_tpu_custom_call(args, payload, shapes, dtypes)
@@ -291,21 +320,21 @@ class FlashAttention(torch.autograd.Function):
           m, partition_spec[0:3], ctx.full_shape[0:3], mesh=mesh).global_tensor
 
     ctx.save_for_backward(full_q, full_k, full_v, o, l, m, q_segment_ids,
-                          kv_segment_ids)
+                          kv_segment_ids, full_ab)
     return o
 
   @staticmethod
   def backward(ctx, grad_output):
     from jax.experimental.pallas.ops.tpu.flash_attention import _flash_attention_bwd_dq, _flash_attention_bwd_dkv
 
-    q, k, v, o, l, m, q_segment_ids, kv_segment_ids = ctx.saved_tensors
+    q, k, v, o, l, m, q_segment_ids, kv_segment_ids, ab = ctx.saved_tensors
     causal = ctx.causal
     sm_scale = ctx.sm_scale
     partition_spec = ctx.partition_spec
     mesh = ctx.mesh
     full_shape = ctx.full_shape
     segment_ids = ctx.segment_ids
-    grad_q = grad_k = grad_v = None
+    grad_q = grad_k = grad_v = grad_ab = None
 
     grad_i = torch.sum(
         o.to(torch.float32) * grad_output.to(torch.float32),
@@ -331,6 +360,9 @@ class FlashAttention(torch.autograd.Function):
           grad_output, partition_spec, mesh=mesh).global_tensor
       expanded_grad_i = xs.enable_manual_sharding(
           expanded_grad_i, partition_spec, mesh=mesh).global_tensor
+      if ab:
+        ab = xs.enable_manual_sharding(
+            ab, partition_spec, mesh=mesh).global_tensor
 
     if ctx.needs_input_grad[0]:
       payload, _ = trace_pallas(
@@ -338,7 +370,7 @@ class FlashAttention(torch.autograd.Function):
           q,
           k,
           v,
-          None,
+          ab,
           segment_ids,
           l,
           m,
@@ -358,14 +390,27 @@ class FlashAttention(torch.autograd.Function):
           static_argnames=[
               "block_q_major", "block_k_major", "block_k", "sm_scale", "causal",
               "mask_value", "debug"
-          ])
+          ],
+          use_cache=True,
+      )
 
       args = [q, k, v]
+      if ab is not None:
+        args += [ab]
       if segment_ids is not None:
         args += [q_segment_ids, kv_segment_ids]
       args += [expanded_l, expanded_m, grad_output, expanded_grad_i]
-      grad_q = torch_xla._XLAC._xla_tpu_custom_call(args, payload, [q.shape],
-                                                    [q.dtype])[0]
+
+      outputs = [q]
+      if ab is not None:
+        outputs += [ab]
+      grads = torch_xla._XLAC._xla_tpu_custom_call(args, payload,
+                                                   [i.shape for i in outputs],
+                                                   [i.dtype for i in outputs])
+      if ctx.needs_input_grad[0]:
+        grad_q = grads[0]
+      if ctx.needs_input_grad[-3]:
+        grad_ab = grads[1]
 
     if ctx.needs_input_grad[1] or ctx.needs_input_grad[2]:
       payload, _ = trace_pallas(
@@ -373,7 +418,7 @@ class FlashAttention(torch.autograd.Function):
           q,
           k,
           v,
-          None,
+          ab,
           segment_ids,
           l,
           m,
@@ -396,15 +441,13 @@ class FlashAttention(torch.autograd.Function):
           static_argnames=[
               "block_q_major", "block_k_major", "block_k", "block_q",
               "sm_scale", "causal", "mask_value", "debug"
-          ])
+          ],
+          use_cache=True)
 
-      args = [q, k, v]
-      if segment_ids is not None:
-        args += [q_segment_ids, kv_segment_ids]
-      args += [expanded_l, expanded_m, grad_output, expanded_grad_i]
       grads = torch_xla._XLAC._xla_tpu_custom_call(args, payload,
                                                    [k.shape, v.shape],
                                                    [k.dtype, v.dtype])
+
     if ctx.needs_input_grad[1]:
       grad_k = grads[0]
     if ctx.needs_input_grad[2]:
@@ -419,7 +462,7 @@ class FlashAttention(torch.autograd.Function):
       grad_v = xs.disable_manual_sharding(
           grad_v, partition_spec, full_shape, mesh=mesh).global_tensor
 
-    return grad_q, grad_k, grad_v, None, None, None, None, None, None
+    return grad_q, grad_k, grad_v, None, None, None, None, grad_ab, None, None
 
 
 def flash_attention(
@@ -431,11 +474,13 @@ def flash_attention(
     kv_segment_ids=None,  # [batch_size, kv_seq_len]
     sm_scale=1.0,
     *,
+    ab=None,  # [batch_size, num_heads, q_seq_len, kv_seq_len]
     partition_spec=None,
-    mesh=None):
+    mesh=None,
+):
   # TODO: support SPMD and Dynamo with segment_ids.
   return FlashAttention.apply(q, k, v, causal, q_segment_ids, kv_segment_ids,
-                              sm_scale, partition_spec, mesh)
+                              sm_scale, ab, partition_spec, mesh)
 
 
 def paged_attention(q,
@@ -444,7 +489,8 @@ def paged_attention(q,
                     lengths,
                     page_indices,
                     pages_per_compute_block,
-                    megacore_mode: str = None):
+                    megacore_mode: str = None,
+                    attn_logits_soft_cap: float = None):
   # Import JAX within the function such that we don't need to call the jax_import_guard()
   # in the global scope which could cause problems for xmp.spawn.
   jax_import_guard()
@@ -463,7 +509,10 @@ def paged_attention(q,
       page_indices,
       pages_per_compute_block=pages_per_compute_block,
       megacore_mode=megacore_mode,
-      static_argnames=["pages_per_compute_block", "megacore_mode"],
+      attn_logits_soft_cap=attn_logits_soft_cap,
+      static_argnames=[
+          "pages_per_compute_block", "megacore_mode", "attn_logits_soft_cap"
+      ],
   )
 
   batch_size, num_heads, head_dim = q.shape
@@ -623,6 +672,7 @@ def _make_group_metadata(
   # group_tiles.sum() < tiles_m + num_groups - 1. The kernel grid will be sized
   # such that we only execute the necessary number of tiles.
   tiles_m = _calculate_num_tiles(m, tm)
+
   group_ids = repeat_with_fixed_output_size(
       torch.arange(num_groups, dtype=torch.int32).to(device), group_tiles,
       tiles_m + num_groups - 1)
@@ -689,7 +739,8 @@ def repeat_with_fixed_output_size(input: torch.Tensor, repeats: torch.Tensor,
   # shift the repeats by one
   # tensor([0, 0, 1, 2, 0, 4, 0, 6, 7, 8])
   exclusive_repeats = torch.roll(repeats, shifts=1)
-  exclusive_repeats[0] = 0
+  exclusive_repeats = exclusive_repeats.index_copy(
+      0, torch.tensor([0], device=device), torch.tensor([0], device=device))
 
   # tensor([ 0,  0,  1,  3,  3,  7,  7, 13, 20, 28])
   scatter_indices = torch.cumsum(exclusive_repeats, dim=0)
@@ -704,10 +755,12 @@ def repeat_with_fixed_output_size(input: torch.Tensor, repeats: torch.Tensor,
   # tensor([2, 1, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
   block_split_indicators = torch.zeros(
       total_repeat_length, dtype=torch.int32, device=device)
-  block_split_indicators.scatter_add_(0, valid_indices.to(torch.int64),
-                                      torch.ones_like(block_split_indicators))
+  block_split_indicators = block_split_indicators.scatter_add(
+      0, valid_indices.to(torch.int64), torch.ones_like(block_split_indicators))
   # out_of_bound indices also scatter to index 0, need to offset them
-  block_split_indicators[0] -= out_of_bound_count
+  block_split_indicators = block_split_indicators.index_copy(
+      0, torch.tensor([0], device=device),
+      (block_split_indicators[0] - out_of_bound_count).unsqueeze(0))
 
   # value in gather_indices represents the index in the input.
   # tensor([1, 2, 2, 4, 4, 4, 4, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7])
@@ -720,7 +773,7 @@ def gmm(
     lhs: torch.Tensor,
     rhs: torch.Tensor,
     group_sizes: torch.Tensor,
-    tiling: tuple[int, int, int] = (512, 512, 512)
+    tiling: Tuple[int, int, int] = (512, 512, 512)
 ) -> torch.Tensor:
   """Compute lhs[sizes[i-1]:sizes[i], :] @ rhs for each group 'i'.
 
@@ -748,6 +801,7 @@ def gmm(
       rhs,
       group_sizes,
       static_argnames=["tiling", "preferred_element_type"],
+      use_cache=True,
       preferred_element_type=convert_torch_dtype_to_jax(preferred_element_type),
       tiling=(tm, tk, tn))
 
@@ -771,7 +825,7 @@ def tgmm(
     lhs: torch.Tensor,
     rhs: torch.Tensor,
     group_sizes: torch.Tensor,
-    tiling: tuple[int, int, int] = (512, 512, 512)
+    tiling: Tuple[int, int, int] = (512, 512, 512)
 ) -> torch.Tensor:
   """Compute lhs[:, sizes[i-1]:sizes[i]] @ rhs[sizes[i-1]:sizes[i], :].
 
@@ -800,6 +854,7 @@ def tgmm(
       rhs,
       group_sizes,
       static_argnames=["tiling", "preferred_element_type"],
+      use_cache=True,
       preferred_element_type=convert_torch_dtype_to_jax(preferred_element_type),
       tiling=(tm, tk, tn))
 
@@ -875,7 +930,7 @@ def flash_attention_non_xla(q: torch.Tensor,
 
 
 XLA_LIB.define(
-    "paged_attention(Tensor q, Tensor k_pages, Tensor v_pages, Tensor lengths, Tensor page_indices, int pages_per_compute_block, str megacore_mode=None) -> Tensor",
+    "paged_attention(Tensor q, Tensor k_pages, Tensor v_pages, Tensor lengths, Tensor page_indices, int pages_per_compute_block, str megacore_mode=None, float attn_logits_soft_cap=None) -> Tensor",
 )
 
 
@@ -886,9 +941,11 @@ def paged_attention_xla(q: torch.Tensor,
                         lengths: torch.Tensor,
                         page_indices: torch.Tensor,
                         pages_per_compute_block: int,
-                        megacore_mode: str = None):
+                        megacore_mode: str = None,
+                        attn_logits_soft_cap: float = None):
   return paged_attention(q, k_pages, v_pages, lengths, page_indices,
-                         pages_per_compute_block, megacore_mode)
+                         pages_per_compute_block, megacore_mode,
+                         attn_logits_soft_cap)
 
 
 @impl(XLA_LIB, "paged_attention", "CompositeExplicitAutograd")
@@ -898,5 +955,44 @@ def paged_attention_non_xla(q: torch.Tensor,
                             lengths: torch.Tensor,
                             page_indices: torch.Tensor,
                             pages_per_compute_block: int,
-                            megacore_mode: str = None):
+                            megacore_mode: str = None,
+                            attn_logits_soft_cap: float = None):
   return non_xla_attetion(q, k_pages, v_pages, "paged")
+
+
+XLA_LIB.define(
+    "gmm(Tensor lhs, Tensor rhs, Tensor group_sizes, int[]? tiling=None) -> Tensor",
+)
+
+
+@impl(XLA_LIB, "gmm", "XLA")
+def gmm_xla(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    group_sizes: torch.Tensor,
+    # pytorch custom op does not allow tuple type, use list instead
+    tiling: Optional[List[int]] = [512, 512, 512]):
+  assert len(tiling) == 3, "tiling must be a list with 3 integers"
+  assert lhs.dim() == 2, "lhs must be a 2d, torch.Tensor with shape [k, m]"
+  assert rhs.dim(
+  ) == 3, "rhs must be a A 3d torch.Tensor with shape [num_groups, k, n]"
+  tiling = tuple(tiling)
+  return gmm(lhs, rhs, group_sizes, tiling)
+
+
+@impl(XLA_LIB, "gmm", "CompositeExplicitAutograd")
+def gmm_non_xla(lhs: torch.Tensor,
+                rhs: torch.Tensor,
+                group_sizes: torch.Tensor,
+                tiling: Optional[List[int]] = [512, 512, 512]):
+  # This will be called when dynamo use fake tensor to construct the fake output.
+  # We need to make sure output tensor's shape is correct.
+  if lhs.device != torch.device("meta"):
+    warnings.warn(f'XLA gmm should only be applied to tensors on XLA device')
+  assert len(tiling) == 3, "tiling must be a list with 3 integers"
+  assert lhs.dim() == 2, "lhs must be a 2d, torch.Tensor with shape [k, m]"
+  assert rhs.dim(
+  ) == 3, "rhs must be a A 3d torch.Tensor with shape [num_groups, k, n]"
+
+  # we only need to return the tensor with correct shape for meta tensor.
+  return torch.empty(lhs.size()[0], rhs.size()[2], device=lhs.device)
