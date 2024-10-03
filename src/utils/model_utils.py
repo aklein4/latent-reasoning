@@ -57,7 +57,7 @@ class ReZeroIO(nn.Module):
             eps (float, optional): epsilon for normalization. Defaults to 1e-5.
         """
         super().__init__()
-        self.norm = nn.RMSNorm(hidden_size, eps=eps, elementwise_affine=True)
+        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
         self.filter = nn.Parameter(torch.zeros(1, 1, hidden_size))
 
 
