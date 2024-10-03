@@ -49,8 +49,6 @@ class HLmConfig(XLAConfig):
             The multiplier for the size of the IAF MLPs.
         z_output_layers (`int`):
             The number of layers to keep of z for use by the decoder.
-        reverse_z (`bool`):
-            Whether to reverse the order of the z outputs.
     """
 
     model_type = 'hlm'
@@ -72,7 +70,6 @@ class HLmConfig(XLAConfig):
         z_size=None,
         z_mlp_mult=None,
         z_output_layers=None,
-        reverse_z=None,
         *args,
         **kwargs,
     ):
@@ -99,7 +96,7 @@ class HLmConfig(XLAConfig):
         self.z_mlp_mult = z_mlp_mult
 
         self.z_output_layers = z_output_layers
-        
+
         super().__init__(*args, **kwargs)
 
 
@@ -139,7 +136,7 @@ class LmHead(nn.Module):
 
     def __init__(self, config: HLmConfig):
         super().__init__()
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
+        self.norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, hidden_states):
@@ -167,19 +164,12 @@ class HLmEncoderLayer(nn.Module):
         self.iaf_output_size = self.num_iaf_heads * config.attention_head_size
 
         # norms
-        self.io = ReZeroIO(config.hidden_size, config.norm_eps)
-
-        # z components
-        self.z_proj = GaussianIAF(
-            self.hidden_size,
-            self.z_size,
-            config.z_mlp_mult,
-            config.hidden_act
-        )
+        self.block_io = ReZeroIO(config.hidden_size, config.norm_eps)
+        self.z_io = ReZeroIO(config.hidden_size, config.norm_eps)
 
         # transformer projections
         self.up = FusedLinear(
-            [self.hidden_size, self.z_size],
+            self.hidden_size,
             [self.qkv_size, 2*self.qkv_size] + [config.mlp_size]*2,
             bias=False
         )
@@ -190,11 +180,12 @@ class HLmEncoderLayer(nn.Module):
             mask=self._get_iaf_up_mask(config)
         )
         self.down = FusedLinear(
-            [self.z_size, self.qkv_size, config.mlp_size],
+            [self.qkv_size, config.mlp_size],
             config.hidden_size,
             bias=False
         )
 
+        # transformer components
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
@@ -208,6 +199,19 @@ class HLmEncoderLayer(nn.Module):
         )
         self.mlp = GLU(config.hidden_act)
 
+        # z components
+        self.z_proj = GaussianIAF(
+            self.hidden_size,
+            self.z_size,
+            config.z_mlp_mult,
+            config.hidden_act
+        )
+        self.z_down = nn.Linear(
+            self.z_size,
+            self.hidden_size,
+            bias=False
+        )
+
         # z scale
         self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
 
@@ -218,9 +222,9 @@ class HLmEncoderLayer(nn.Module):
         # only iaf heads can see the next noise
         noise_iaf_mask = torch.ones(self.num_iaf_heads*config.attention_head_size, self.z_size)
         noise_bid_mask = torch.zeros(self.num_bid_heads*config.attention_head_size, self.z_size)
+        noise_kv_mask = torch.cat([noise_iaf_mask, noise_bid_mask], dim=0)
         
         # expand to cover k and v
-        noise_kv_mask = torch.cat([noise_iaf_mask, noise_bid_mask], dim=0)
         noise_kv_mask = noise_kv_mask.repeat(2, 1)
 
         return noise_kv_mask
@@ -235,6 +239,9 @@ class HLmEncoderLayer(nn.Module):
         iaf_mask = torch.full_like(attn_mask, float('-inf'))
         attn_mask[:, :self.num_iaf_heads] += torch.triu(iaf_mask[:, :self.num_iaf_heads], diagonal=0)
 
+        # add register to mask
+        attn_mask = torch.cat([attn_mask, torch.zeros_like(attn_mask[..., :1])], dim=-1)
+
         return attn_mask
         
 
@@ -243,41 +250,53 @@ class HLmEncoderLayer(nn.Module):
         hidden_states,
         mask,
         noise,
-        next_noise,
         attn_mask
     ):
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
-        noise = noise * float_mask # noise becomes zero where not used
 
-        x = self.io.enter(hidden_states)
+        noise.requires_grad = True
+
+        # get transformer inputs
+        q, kv, mlp_gate, mlp_val = self.up(self.block_io.enter(hidden_states))
+        kv = kv + self.iaf_up(noise)
+
+        # get transformer outputs
+        attn_out = self.attention(
+            q, *kv.chunk(2, dim=-1),
+            attention_mask=attn_mask,
+            registered_mask=True
+        )
+        mlp_out = self.mlp(mlp_gate, mlp_val)
+
+        # apply transformer
+        hidden_states = self.block_io.exit(
+            hidden_states+self.down(attn_out, mlp_out),
+            self.down(attn_out, mlp_out),
+        )
 
         # get z, params become zero where not used
         mu, log_sigma = (
-            float_mask * self.z_scale *
+            float_mask *
+            self.z_scale *
             self.z_proj(
-                x,
+                self.z_io.enter(hidden_states),
                 noise
             )
         ).chunk(2, dim=-1)
         sigma = F.softplus(log_sigma + np.log(np.e - 1))
 
+        sigma[-1, 5, 4].backward()
+        print(noise.grad[-1])
+        exit()
+
         # z becomes zero when noise and params are zeroed
+        noise = noise * float_mask
         z = mu + sigma * noise
 
-        # apply transformer
-        q, kv, mlp_gate, mlp_val = self.up(x, z)
-        kv = kv + self.iaf_up(next_noise)
-
-        # get attn
-        attn_out = self.attention(
-            q, *kv.chunk(2, dim=-1),
-            attention_mask=attn_mask
-        )
-        mlp_out = self.mlp(mlp_gate, mlp_val)
-
-        hidden_states = self.io.exit(
+        # apply z
+        hidden_states = self.z_io.exit(
             hidden_states,
-            self.down(z, attn_out, mlp_out),
+            self.z_down(z),
         )
 
         return hidden_states, z, mu, sigma
@@ -294,28 +313,27 @@ class HLmGeneratorLayer(nn.Module):
         self.mlp_size = config.mlp_size
         self.z_size = config.z_size
         
-        # norm
-        self.io = ConditionalIO(config.hidden_size, config.norm_eps)
-
-        # z components
-        self.z_proj = nn.Linear(self.hidden_size, self.z_size, bias=False)
+        # norms
+        self.block_io = ConditionalIO(config.hidden_size, config.norm_eps)
+        self.z_io = ReZeroIO(config.hidden_size, config.norm_eps) # only matters for where mask
 
         # transformer projections
         self.up = FusedLinear(
-            [self.hidden_size, self.z_size],
+            self.hidden_size,
             [self.qkv_size]*3 + [config.mlp_size]*2,
             bias=False
         )
         self.down = FusedLinear(
-            [self.z_size, self.qkv_size, config.mlp_size],
+            [self.qkv_size, config.mlp_size],
             config.hidden_size,
             bias=False
         )
 
+        # transformer components
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            False,
+            config.use_register,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -324,6 +342,10 @@ class HLmGeneratorLayer(nn.Module):
             position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
         self.mlp = GLU(config.hidden_act)
+
+        # z components
+        self.z_proj = nn.Linear(self.hidden_size, 2*self.z_size, bias=False)
+        self.z_down = nn.Linear(self.z_size, self.hidden_size, bias=False)
 
         # z scale
         self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
@@ -335,40 +357,50 @@ class HLmGeneratorLayer(nn.Module):
         mask,
         z=None,
         noise=None,
-        attn_mask=None,
     ):
         assert z is not None or noise is not None
         assert z is None or noise is None
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
 
-        x = self.io.enter(hidden_states, mask)
-
-        # get z
-        mu = (
-            float_mask *
-            self.z_scale *
-            self.z_proj(x)
+        # get transformer inputs
+        q, k, v, mlp_gate, mlp_val = self.up(
+            self.block_io.enter(hidden_states, mask)
         )
 
-        if z is None:
-            z = mu + noise
-        z = z * float_mask
-
-        # apply transformer
-        q, k, v, mlp_gate, mlp_val = self.up(x, z)
+        # get transformer outputs
         attn_out = self.attention(
-            q, k, v,
-            attention_mask=attn_mask
+            q, k, v
         )
         mlp_out = self.mlp(mlp_gate, mlp_val)
 
-        hidden_states = self.io.exit(
+        # apply transformer
+        hidden_states = self.block_io.exit(
             hidden_states,
-            self.down(z, attn_out, mlp_out),
+            self.down(attn_out, mlp_out),
             mask
         )
 
-        return hidden_states, z, mu
+        # get z
+        mu, log_sigma = (
+            float_mask *
+            self.z_scale *
+            self.z_proj(self.z_io.enter(hidden_states))
+        ).chunk(2, dim=-1)
+        sigma = F.softplus(log_sigma + np.log(np.e - 1))
+
+        if z is None:
+            noise = noise * float_mask
+            z = mu + sigma * noise # z is zero where noise and mu are zero
+        else:
+            z = z * float_mask # zero z again, just in case
+
+        # apply z
+        hidden_states = self.z_io.exit(
+            hidden_states,
+            self.z_down(z),
+        )
+
+        return hidden_states, z, mu, sigma
     
 
 class HLmDecoderLayer(nn.Module):
@@ -399,7 +431,7 @@ class HLmDecoderLayer(nn.Module):
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            False,
+            config.use_register,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -410,22 +442,32 @@ class HLmDecoderLayer(nn.Module):
         self.mlp = GLU(config.hidden_act)
 
 
+    @torch.no_grad()
+    def get_attn_mask(self, attn_mask):
+        if self.attention.use_register:
+            attn_mask = torch.cat([attn_mask, torch.zeros_like(attn_mask[..., :1])], dim=-1)
+        
+        return attn_mask
+
+
     def forward(
         self,
         hidden_states,
-        attn_mask=None,
+        attn_mask,
     ):
-
-        x = self.io.enter(hidden_states)
-
-        # apply transformer
-        q, k, v, mlp_gate, mlp_val = self.up(x)
+        
+        # get transformer inputs
+        q, k, v, mlp_gate, mlp_val = self.up(self.io.enter(hidden_states))
+        
+        # get transformer outputs
         attn_out = self.attention(
             q, k, v,
-            attention_mask=attn_mask
+            attention_mask=attn_mask,
+            registered_mask=True
         )
         mlp_out = self.mlp(mlp_gate, mlp_val)
 
+        # apply transformer
         hidden_states = self.io.exit(
             hidden_states,
             self.down(attn_out, mlp_out),
@@ -494,9 +536,6 @@ class HLmEncoder(nn.Module):
         attn_mask = self.layers[0].get_iaf_attn_mask(attn_mask)
         attn_mask = attn_mask.detach()
 
-        # pad noise for last layer iaf heads
-        padded_noise = torch.cat([noise, torch.zeros_like(noise[:, :, -1:])], dim=2)
-
         zs = []
         mus = []
         sigmas = []
@@ -506,7 +545,6 @@ class HLmEncoder(nn.Module):
                 hidden_states,
                 long_mask,
                 noise[:, :, i],
-                padded_noise[:, :, i+1],
                 attn_mask
             )
 
@@ -514,10 +552,11 @@ class HLmEncoder(nn.Module):
             mus.append(mu)
             sigmas.append(sigma)
         
+        # flip z here for efficiency
         return (
-            torch.stack(zs, dim=2),
-            torch.stack(mus, dim=2),
-            torch.stack(sigmas, dim=2)
+            torch.stack(zs[::-1], dim=2),
+            torch.stack(mus[::-1], dim=2),
+            torch.stack(sigmas[::-1], dim=2)
         )
 
 
@@ -570,39 +609,34 @@ class HLmGenerator(nn.Module):
         mask,
         z=None,
         noise=None,
-        num_uncond=None
     ):
         long_mask = mask.long()
         
         hidden_states = self.input_module(input_ids, mask)
         bs, seq_len = hidden_states.shape[:2]
 
-        # mask out conditionals for uncond sequences
-        attn_mask = torch.zeros(bs, 1, seq_len, seq_len, device=input_ids.device, dtype=hidden_states.dtype)
-        if num_uncond is not None:
-            attn_mask[:num_uncond] = torch.where(
-                mask[:num_uncond].unsqueeze(1).unsqueeze(1), # [bs, 1=head, 1=q, seq_len=k]
-                torch.zeros_like(attn_mask[:num_uncond]),
-                torch.full_like(attn_mask[:num_uncond], float('-inf'))
-            )
-        attn_mask = attn_mask.detach()
-
-        mus = []
         zs = []
+        mus = []
+        sigmas = []
         for i, layer in enumerate(self.layers):
             
-            hidden_states, z_out, mu = layer(
+            hidden_states, z_out, mu, sigma = layer(
                 hidden_states,
                 long_mask,
                 z=(z[:, :, i] if z is not None else None),
                 noise=(noise[:, :, i] if noise is not None else None),
-                attn_mask=attn_mask
             )
 
-            mus.append(mu)
             zs.append(z_out)
+            mus.append(mu)
+            sigmas.append(sigma)
 
-        return torch.stack(zs, dim=2), torch.stack(mus, dim=2)
+        # we don't flip generator zs
+        return (
+            torch.stack(zs, dim=2),
+            torch.stack(mus, dim=2),
+            torch.stack(sigmas, dim=2)
+        )
     
 
 class HLmDecoder(nn.Module):
@@ -654,7 +688,9 @@ class HLmDecoder(nn.Module):
             mask.unsqueeze(1).unsqueeze(1), # [bs, 1=head, 1=q, seq_len=k]
             torch.zeros_like(attn_mask),
             torch.full_like(attn_mask, float('-inf'))
-        ).detach()
+        )
+        attn_mask = self.layers[0].get_attn_mask(attn_mask)
+        attn_mask = attn_mask.detach()
 
         for i, layer in enumerate(self.layers):
             
@@ -698,9 +734,6 @@ class HLmModel(XLAModel):
         self.z_output_layers = config.z_output_layers
         self.z_output_size = config.z_output_layers * config.z_size
 
-        self.reverse_z = config.reverse_z
-        assert self.reverse_z is not None
-
         self.encoder = HLmEncoder(config)
         self.generator = HLmGenerator(config)
         self.decoder = HLmDecoder(config)
@@ -721,13 +754,7 @@ class HLmModel(XLAModel):
         self,
         input_ids,
         mask,
-        num_uncond=None,
-        debug=False
     ):
-        if num_uncond is not None:
-            assert num_uncond > 0
-            assert num_uncond <= input_ids.shape[0]
-
         bs, seq_len = input_ids.shape
 
         # sample noise for the encoder
@@ -739,14 +766,8 @@ class HLmModel(XLAModel):
         # pass through the encoder
         z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
         
-        # flip z if needed
-        if self.reverse_z:
-            z = z.flip(2)
-            enc_mu = enc_mu.flip(2)
-            enc_sigma = enc_sigma.flip(2)
-
         # pass through the generator
-        _, gen_mu = self.generator(input_ids, mask, z=z, num_uncond=num_uncond)
+        _, gen_mu, gen_sigma = self.generator(input_ids, mask, z=z)
 
         # get z for the decoder
         z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
@@ -755,19 +776,20 @@ class HLmModel(XLAModel):
         lm_logits = self.decoder(mask, z_out)
 
         kl = (
-            -torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2)
+            torch.log(gen_sigma) - torch.log(enc_sigma)
+            + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2) / (gen_sigma**2)
             - 0.5
         ).sum(-1)
-        if not debug:
-            kl = kl.sum(-1)
 
-        if num_uncond is not None:
-            uncond_kl = kl[:num_uncond]
-            kl = kl[num_uncond:]
-            return lm_logits, uncond_kl, kl
+        smooth_mu = enc_mu[:, :, -self.z_output_layers:]
+        smooth_sigma = enc_sigma[:, :, -self.z_output_layers:]
+        smooth_kl = (
+            -torch.log(smooth_sigma)
+            + 0.5 * (smooth_sigma**2 + smooth_mu**2)
+            - 0.5
+        ).sum(-1).sum(-1)
 
-        return lm_logits, kl
+        return lm_logits, kl, smooth_kl
 
 
     def sample(

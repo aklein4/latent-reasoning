@@ -296,13 +296,7 @@ class RotaryAttention(nn.Module):
             value_states = torch.cat((value_states, v_reg_token), dim=2)
 
             if attention_mask is not None and not registered_mask:
-                attention_mask = torch.cat(
-                    [
-                        attention_mask,
-                        torch.zeros(*attention_mask.shape[:-1], 1, dtype=attention_mask.dtype, device=attention_mask.device)
-                    ],
-                    dim=-1
-                )
+                attention_mask = torch.cat([attention_mask, torch.zeros_like(attention_mask[..., :1])], dim=-1)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / np.sqrt(self.head_dim)
         if attention_mask is not None:

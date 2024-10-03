@@ -12,7 +12,7 @@ mlp_size: 256
 attention_head_size: 32
 num_attention_heads: 3
 num_iaf_attention_heads: 2
-num_registers: 0
+use_register: true
 
 num_layers: 4
 num_decoder_layers: 2
@@ -27,6 +27,5 @@ z_size: 11
 z_mlp_mult: 5
 
 z_output_layers: 3
-reverse_z: true
 
 gradient_checkpointing: true
