@@ -25,17 +25,17 @@ class XLAHLmTrainer(BaseXLATrainer):
             kl = kl.sum(-1)
         return kl.mean()
 
-    def loss(self, token_loss, kl_loss, kl_smooth_loss, kl_entropy):
+    def loss(self, token_loss, kl_loss, kl_smooth_loss, kl_collapse):
         # if either clip triggers, only use kl
         return (
             self.kl_w * kl_loss +
-            self.kl_smooth_w * kl_smooth_loss -
-            self.kl_entropy_w * kl_entropy +
+            self.kl_smooth_w * kl_smooth_loss +
+            self.kl_collapse_w * kl_collapse +
             self.token_w * token_loss
         )
     
 
-    def kl_entropy(self, kl):
+    def kl_collapse(self, kl):
         avg = kl.mean(1).mean(0)
         probs = avg / avg.sum()
         return -(torch.log(probs)).mean()
@@ -89,7 +89,7 @@ class XLAHLmTrainer(BaseXLATrainer):
             kl_loss=self.kl_loss(kl),
             kl_smooth_loss=self.kl_loss(smooth_kl, smooth=True),
             
-            kl_entropy=self.kl_entropy(kl),
+            kl_collapse=self.kl_collapse(kl),
 
             acc=self.acc(logits, x, mask),
             clip_perc=self.clip_perc(mask, clip_mask),
@@ -107,7 +107,7 @@ class XLAHLmTrainer(BaseXLATrainer):
             results.token_loss,
             results.kl_loss,
             results.kl_smooth_loss,
-            results.kl_entropy
+            results.kl_collapse
         )
 
         results.one_minus_acc = 1 - results.acc
