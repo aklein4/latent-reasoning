@@ -568,7 +568,8 @@ class HLmGenerator(nn.Module):
         self,
         input_ids,
         mask,
-        z,
+        z=None,
+        noise=None,
         num_uncond=None
     ):
         long_mask = mask.long()
@@ -587,18 +588,21 @@ class HLmGenerator(nn.Module):
         attn_mask = attn_mask.detach()
 
         mus = []
+        zs = []
         for i, layer in enumerate(self.layers):
             
-            hidden_states, _, mu = layer(
+            hidden_states, z_out, mu = layer(
                 hidden_states,
                 long_mask,
-                z=z[:, :, i],
+                z=(z[:, :, i] if z is not None else None),
+                noise=(noise[:, :, i] if noise is not None else None),
                 attn_mask=attn_mask
             )
 
             mus.append(mu)
+            zs.append(z_out)
 
-        return torch.stack(mus, dim=2)
+        return torch.stack(zs, dim=2), torch.stack(mus, dim=2)
     
 
 class HLmDecoder(nn.Module):
@@ -742,7 +746,7 @@ class HLmModel(XLAModel):
             enc_sigma = enc_sigma.flip(2)
 
         # pass through the generator
-        gen_mu = self.generator(input_ids, mask, z, num_uncond=num_uncond)
+        _, gen_mu = self.generator(input_ids, mask, z=z, num_uncond=num_uncond)
 
         # get z for the decoder
         z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
@@ -764,3 +768,30 @@ class HLmModel(XLAModel):
             return lm_logits, uncond_kl, kl
 
         return lm_logits, kl
+
+
+    def sample(
+        self,
+        input_ids,
+        mask,
+        noise=None,
+    ):
+        bs, seq_len = input_ids.shape
+
+        # sample noise for the encoder
+        if noise is None:
+            noise = torch.randn(
+                [bs, seq_len, self.num_layers, self.z_size],
+                device=input_ids.device, dtype=self.encoder.input_module.embs.weight.dtype
+            )
+
+        # pass through the generator
+        z, _ = self.generator(input_ids, mask, noise=noise)
+
+        # get z for the decoder
+        z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
+
+        # pass through the decoder
+        lm_logits = self.decoder(mask, z_out)
+
+        return lm_logits.argmax(-1)
