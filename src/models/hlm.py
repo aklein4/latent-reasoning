@@ -29,8 +29,8 @@ class HLmConfig(XLAConfig):
             Number of attention heads for each attention layer in the Transformer encoder.
         num_iaf_attention_heads (`int`):
             Number of attention heads for the encoder IAF.
-        num_registers (`int`):
-            Number of registers to use in the attention layer.
+        use_register (`bool`):
+            Whether to use the register mechanism in attention.
         num_layers (`int`):
             Number of hidden layers in the Transformers.
         num_decoder_layers (`int`):
@@ -62,7 +62,7 @@ class HLmConfig(XLAConfig):
         attention_head_size=None,
         num_attention_heads=None,
         num_iaf_attention_heads=None,
-        num_registers=None,
+        use_register=None,
         num_layers=None,
         num_decoder_layers=None,
         hidden_act=None,
@@ -83,7 +83,8 @@ class HLmConfig(XLAConfig):
         self.attention_head_size = attention_head_size
         self.num_attention_heads = num_attention_heads
         self.num_iaf_attention_heads = num_iaf_attention_heads
-        self.num_registers = num_registers
+        self.use_register = use_register
+        assert use_register is not None
 
         self.num_layers = num_layers
         self.num_decoder_layers = num_decoder_layers
@@ -98,8 +99,7 @@ class HLmConfig(XLAConfig):
         self.z_mlp_mult = z_mlp_mult
 
         self.z_output_layers = z_output_layers
-        self.reverse_z = reverse_z
-
+        
         super().__init__(*args, **kwargs)
 
 

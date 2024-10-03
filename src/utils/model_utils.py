@@ -6,15 +6,12 @@ import torch.nn.functional as F
 
 try:
     from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
-    from utils.custom_kernel import flash_attention
 except:
     pass
 
 import numpy as np
 
 from transformers.activations import ACT2FN
-
-import utils.constants as constants
 
 
 def apply_fsdp(
@@ -306,12 +303,6 @@ class RotaryAttention(nn.Module):
                     ],
                     dim=-1
                 )
-
-        if constants.XLA_AVAILABLE:
-            return flash_attention(
-                query_states, key_states, value_states,
-                ab=attention_mask
-            )
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / np.sqrt(self.head_dim)
         if attention_mask is not None:

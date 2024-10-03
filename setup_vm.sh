@@ -21,9 +21,6 @@ pip install torch~=2.4.0 torch_xla[tpu]~=2.4.0 -f https://storage.googleapis.com
 # update path
 export PATH="/home/$USER/.local/bin:$PATH"
 
-# install jax for flash attention
-pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-
 # install extras
 pip install transformers datasets webdataset wandb matplotlib
 
