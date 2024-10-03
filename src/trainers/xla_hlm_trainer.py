@@ -38,7 +38,7 @@ class XLAHLmTrainer(BaseXLATrainer):
     def kl_entropy(self, kl):
         avg = kl.mean(1).mean(0)
         probs = avg / avg.sum()
-        return -(probs * torch.log(probs)).sum()
+        return -(torch.log(probs)).mean()
 
 
     def acc(self, logits, x, mask):

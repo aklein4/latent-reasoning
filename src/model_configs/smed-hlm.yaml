@@ -14,8 +14,8 @@ num_attention_heads: 12
 num_iaf_attention_heads: 4
 use_register: true
 
-num_layers: 24
-num_decoder_layers: 8
+num_layers: 20
+num_decoder_layers: 4
 
 hidden_act: silu
 norm_eps: 0.00001
