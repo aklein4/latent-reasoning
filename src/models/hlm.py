@@ -717,7 +717,8 @@ class HLmModel(XLAModel):
         self,
         input_ids,
         mask,
-        num_uncond=None
+        num_uncond=None,
+        debug=False
     ):
         if num_uncond is not None:
             assert num_uncond > 0
@@ -753,7 +754,9 @@ class HLmModel(XLAModel):
             -torch.log(enc_sigma)
             + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2)
             - 0.5
-        ).sum(-1).sum(-1)
+        ).sum(-1)
+        if not debug:
+            kl = kl.sum(-1)
 
         if num_uncond is not None:
             uncond_kl = kl[:num_uncond]
