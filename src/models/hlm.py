@@ -254,8 +254,6 @@ class HLmEncoderLayer(nn.Module):
     ):
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
 
-        noise.requires_grad = True
-
         # get transformer inputs
         q, kv, mlp_gate, mlp_val = self.up(self.block_io.enter(hidden_states))
         kv = kv + self.iaf_up(noise)
@@ -270,7 +268,7 @@ class HLmEncoderLayer(nn.Module):
 
         # apply transformer
         hidden_states = self.block_io.exit(
-            hidden_states+self.down(attn_out, mlp_out),
+            hidden_states,
             self.down(attn_out, mlp_out),
         )
 
@@ -284,10 +282,6 @@ class HLmEncoderLayer(nn.Module):
             )
         ).chunk(2, dim=-1)
         sigma = F.softplus(log_sigma + np.log(np.e - 1))
-
-        sigma[-1, 5, 4].backward()
-        print(noise.grad[-1])
-        exit()
 
         # z becomes zero when noise and params are zeroed
         noise = noise * float_mask

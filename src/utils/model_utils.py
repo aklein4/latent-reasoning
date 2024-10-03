@@ -241,6 +241,9 @@ class RotaryAttention(nn.Module):
             if use_rope:
                 register_mask[:, :, :, :self.head_dim//rope_fraction] = 0
             self.register_buffer('register_mask', register_mask, persistent=False)
+            
+            if self.use_rope:
+                assert ((self.k_register * self.register_mask) == self.rope(self.k_register * self.register_mask, None)).all()
 
 
     def forward(
