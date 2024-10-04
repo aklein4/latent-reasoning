@@ -14,6 +14,13 @@ import numpy as np
 from transformers.activations import ACT2FN
 
 
+def apply_checkpointing(
+    module: nn.Module,
+    enable
+):
+    return checkpoint_module(module) if enable else module
+
+
 def apply_fsdp(
     module: nn.Module,
     gradient_checkpointing: Optional[bool]=False,

@@ -10,7 +10,8 @@ from utils.model_utils import (
     RotaryAttention,
     GLU,
     ReZeroIO,
-    apply_fsdp
+    apply_fsdp,
+    apply_checkpointing
 )
 from utils.prob_utils import GaussianIAF
 import utils.constants as constants
@@ -482,10 +483,10 @@ class HLmEncoder(nn.Module):
 
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
+        self.input_module = apply_checkpointing(self.input_module, self.gradient_checkpointing)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_checkpointing(layer, self.gradient_checkpointing)
 
 
     def forward(
@@ -572,10 +573,10 @@ class HLmGenerator(nn.Module):
 
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
+        self.input_module = apply_checkpointing(self.input_module, self.gradient_checkpointing)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_checkpointing(layer, self.gradient_checkpointing)
 
 
     def forward(
@@ -640,12 +641,12 @@ class HLmDecoder(nn.Module):
 
 
     def init_fsdp(self):
-        self.z_proj = apply_fsdp(self.z_proj, self.gradient_checkpointing, self.reshard_after_forward)
+        self.z_proj = apply_checkpointing(self.z_proj, self.gradient_checkpointing)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_checkpointing(layer, self.gradient_checkpointing)
 
-        self.lm_head = apply_fsdp(self.lm_head, self.gradient_checkpointing, self.reshard_after_forward)
+        self.lm_head = apply_checkpointing(self.lm_head, self.gradient_checkpointing)
 
 
     def forward(
@@ -723,7 +724,7 @@ class HLmModel(XLAModel):
         self.generator.init_fsdp()
         self.decoder.init_fsdp()
 
-        return apply_fsdp(self, False)
+        return apply_fsdp(self, False, False)
 
 
     def forward(
