@@ -37,7 +37,7 @@ def apply_fsdp(
         optimization_barrier_in_forward=False,
         optimization_barrier_in_backward=False,
         mark_step_on_finalization=False,
-        disable_reshard_on_root=True,
+        disable_reshard_on_root=False,
         compute_dtype=torch.bfloat16,
         buffer_dtype=torch.bfloat16,
         fp32_reduce_scatter=False,
