@@ -38,6 +38,7 @@ def _mp_fn(index, args):
     model_type_config = CONFIG_DICT[model_type](**model_config)
     model = MODEL_DICT[model_type](model_type_config)
     model = model.init_fsdp()
+    xm.mark_step()
     xm.rendezvous("Model Loaded!")
     log_master_print("Model Loaded!")
 
