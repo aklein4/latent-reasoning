@@ -247,6 +247,8 @@ class HLmEncoderLayer(nn.Module):
     ):
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
 
+        print(torch.is_grad_enabled())
+
         x = self.io.enter(hidden_states)
 
         # get z, params become zero where not used
