@@ -29,7 +29,6 @@ def apply_fsdp(
     Returns:
         nn.Module: Module with FSDP applied
     """
-    print(reshard)
     return FSDP(
         checkpoint_module(module) if gradient_checkpointing else module,
         reshard_after_forward=reshard,
