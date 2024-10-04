@@ -242,7 +242,6 @@ class BaseXLATrainer:
                 results.loss.backward()
 
                 # mark step if using gradient accumulation
-                log_master_print(xm.get_stablehlo())
                 if num_mini_batches > 1 and mini_batch_id < num_mini_batches - 1:
                     xm.mark_step()
 

@@ -91,7 +91,7 @@ if __name__ == '__main__':
     # debugging
     # os.environ['PT_XLA_DEBUG'] = '1'
     # os.environ['PT_XLA_DEBUG_LEVEL'] = '1'
-    os.environ['XLA_HLO_DEBUG'] = '1'
+    # os.environ['XLA_HLO_DEBUG'] = '1'
 
     # handle arguments
     args = argparse.ArgumentParser()
