@@ -186,7 +186,7 @@ class FusedLinear(nn.Module):
             self._error_message(inputs)
 
         # apply linear
-        if self.use_mask:
+        if self.use_mask and False:
             x = F.linear(
                 x,
                 self.linear.weight * self.mask,
