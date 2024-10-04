@@ -24,7 +24,7 @@ def apply_checkpointing(
 def apply_fsdp(
     module: nn.Module,
     gradient_checkpointing: Optional[bool]=False,
-    reshard: Optional[bool]=True
+    reshard: Optional[bool]=False
 ) -> nn.Module:
     """ Apply fully sharded parallelism to a module,
     with optional gradient checkpointing and tuned settings.

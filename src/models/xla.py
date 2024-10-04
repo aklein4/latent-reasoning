@@ -20,7 +20,7 @@ class XLAConfig(PretrainedConfig):
         eos_token_id=None,
         pad_token_id=None,
         gradient_checkpointing=False,
-        reshard_after_forward=True,
+        reshard_after_forward=False,
         *args,
         **kwargs,
     ):
