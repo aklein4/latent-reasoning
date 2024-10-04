@@ -28,5 +28,5 @@ z_mlp_mult: 2
 
 z_output_layers: 4
 
-gradient_checkpointing: false
-reshard_after_forward: true
+gradient_checkpointing: true
+reshard_after_forward: false
