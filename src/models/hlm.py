@@ -164,10 +164,9 @@ class HLmEncoderLayer(nn.Module):
         self.iaf_output_size = self.num_iaf_heads * config.attention_head_size
 
         # norms
-        self.block_io = ReZeroIO(config.hidden_size, config.norm_eps)
-        self.z_io = ReZeroIO(config.hidden_size, config.norm_eps)
+        self.io = ReZeroIO(config.hidden_size, config.norm_eps)
 
-        # transformer projections
+        # projections
         self.up = FusedLinear(
             self.hidden_size,
             [self.qkv_size, 2*self.qkv_size] + [config.mlp_size]*2,
@@ -179,8 +178,14 @@ class HLmEncoderLayer(nn.Module):
             bias=False,
             mask=self._get_iaf_up_mask(config)
         )
+        self.z_proj = GaussianIAF(
+            self.hidden_size,
+            self.z_size,
+            config.z_mlp_mult,
+            config.hidden_act
+        )
         self.down = FusedLinear(
-            [self.qkv_size, config.mlp_size],
+            [self.z_size, self.qkv_size, config.mlp_size],
             config.hidden_size,
             bias=False
         )
@@ -198,19 +203,6 @@ class HLmEncoderLayer(nn.Module):
             position_scale=(config.patch_size if hasattr(config, 'patch_size') else 1.0)
         )
         self.mlp = GLU(config.hidden_act)
-
-        # z components
-        self.z_proj = GaussianIAF(
-            self.hidden_size,
-            self.z_size,
-            config.z_mlp_mult,
-            config.hidden_act
-        )
-        self.z_down = nn.Linear(
-            self.z_size,
-            self.hidden_size,
-            bias=False
-        )
 
         # z scale
         self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
@@ -250,34 +242,19 @@ class HLmEncoderLayer(nn.Module):
         hidden_states,
         mask,
         noise,
+        next_noise,
         attn_mask
     ):
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
 
-        # get transformer inputs
-        q, kv, mlp_gate, mlp_val = self.up(self.block_io.enter(hidden_states))
-        kv = kv + self.iaf_up(noise)
-
-        # get transformer outputs
-        attn_out = self.attention(
-            q, *kv.chunk(2, dim=-1),
-            attention_mask=attn_mask,
-            registered_mask=True
-        )
-        mlp_out = self.mlp(mlp_gate, mlp_val)
-
-        # apply transformer
-        hidden_states = self.block_io.exit(
-            hidden_states,
-            self.down(attn_out, mlp_out),
-        )
+        x = self.io.enter(hidden_states)
 
         # get z, params become zero where not used
         mu, log_sigma = (
             float_mask *
             self.z_scale *
             self.z_proj(
-                self.z_io.enter(hidden_states),
+                x,
                 noise
             )
         ).chunk(2, dim=-1)
@@ -287,10 +264,22 @@ class HLmEncoderLayer(nn.Module):
         noise = noise * float_mask
         z = mu + sigma * noise
 
-        # apply z
-        hidden_states = self.z_io.exit(
+        # get transformer inputs
+        q, kv, mlp_gate, mlp_val = self.up(x)
+        kv = kv + self.iaf_up(next_noise)
+
+        # get transformer outputs
+        attn_out = self.attention(
+            q, *kv.chunk(2, dim=-1),
+            attention_mask=attn_mask,
+            registered_mask=True
+        )
+        mlp_out = self.mlp(mlp_gate, mlp_val)
+
+        # save
+        hidden_states = self.io.exit(
             hidden_states,
-            self.z_down(z),
+            self.down(z, attn_out, mlp_out),
         )
 
         return hidden_states, z, mu, sigma
@@ -308,17 +297,16 @@ class HLmGeneratorLayer(nn.Module):
         self.z_size = config.z_size
         
         # norms
-        self.block_io = ConditionalIO(config.hidden_size, config.norm_eps)
-        self.z_io = ReZeroIO(config.hidden_size, config.norm_eps) # only matters for where mask
+        self.io = ConditionalIO(config.hidden_size, config.norm_eps)
 
-        # transformer projections
+        # projections
         self.up = FusedLinear(
             self.hidden_size,
-            [self.qkv_size]*3 + [config.mlp_size]*2,
+            [2*self.z_size] + [self.qkv_size]*3 + [config.mlp_size]*2,
             bias=False
         )
         self.down = FusedLinear(
-            [self.qkv_size, config.mlp_size],
+            [self.z_size, self.qkv_size, config.mlp_size],
             config.hidden_size,
             bias=False
         )
@@ -337,10 +325,6 @@ class HLmGeneratorLayer(nn.Module):
         )
         self.mlp = GLU(config.hidden_act)
 
-        # z components
-        self.z_proj = nn.Linear(self.hidden_size, 2*self.z_size, bias=False)
-        self.z_down = nn.Linear(self.z_size, self.hidden_size, bias=False)
-
         # z scale
         self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
 
@@ -356,29 +340,16 @@ class HLmGeneratorLayer(nn.Module):
         assert z is None or noise is None
         float_mask = mask.to(hidden_states.dtype).unsqueeze(-1)
 
-        # get transformer inputs
-        q, k, v, mlp_gate, mlp_val = self.up(
-            self.block_io.enter(hidden_states, mask)
-        )
-
-        # get transformer outputs
-        attn_out = self.attention(
-            q, k, v
-        )
-        mlp_out = self.mlp(mlp_gate, mlp_val)
-
-        # apply transformer
-        hidden_states = self.block_io.exit(
-            hidden_states,
-            self.down(attn_out, mlp_out),
-            mask
+        # get inputs
+        z_params, q, k, v, mlp_gate, mlp_val = self.up(
+            self.io.enter(hidden_states, mask)
         )
 
         # get z
         mu, log_sigma = (
             float_mask *
             self.z_scale *
-            self.z_proj(self.z_io.enter(hidden_states))
+            z_params
         ).chunk(2, dim=-1)
         sigma = F.softplus(log_sigma + np.log(np.e - 1))
 
@@ -388,10 +359,17 @@ class HLmGeneratorLayer(nn.Module):
         else:
             z = z * float_mask # zero z again, just in case
 
-        # apply z
-        hidden_states = self.z_io.exit(
+        # get transformer outputs
+        attn_out = self.attention(
+            q, k, v
+        )
+        mlp_out = self.mlp(mlp_gate, mlp_val)
+
+        # apply transformer
+        hidden_states = self.io.exit(
             hidden_states,
-            self.z_down(z),
+            self.down(z, attn_out, mlp_out),
+            mask
         )
 
         return hidden_states, z, mu, sigma
@@ -500,13 +478,14 @@ class HLmEncoder(nn.Module):
         ])
 
         self.gradient_checkpointing = False
-    
+        self.reshard_after_forward = config.reshard_after_forward
+
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing)
+        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
 
 
     def forward(
@@ -539,6 +518,7 @@ class HLmEncoder(nn.Module):
                 hidden_states,
                 long_mask,
                 noise[:, :, i],
+                noise[:, :, i+1] if i < len(self.layers)-1 else torch.zeros_like(noise[:, :, 0]),
                 attn_mask
             )
 
@@ -588,13 +568,14 @@ class HLmGenerator(nn.Module):
         ])
 
         self.gradient_checkpointing = False
+        self.reshard_after_forward = config.reshard_after_forward
 
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing)
+        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
 
 
     def forward(
@@ -655,15 +636,16 @@ class HLmDecoder(nn.Module):
         self.lm_head = self.lm_head_type(config)
 
         self.gradient_checkpointing = False
+        self.reshard_after_forward = config.reshard_after_forward
 
 
     def init_fsdp(self):
-        self.z_proj = apply_fsdp(self.z_proj, self.gradient_checkpointing)
+        self.z_proj = apply_fsdp(self.z_proj, self.gradient_checkpointing, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing)
+            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
 
-        self.lm_head = apply_fsdp(self.lm_head, self.gradient_checkpointing)
+        self.lm_head = apply_fsdp(self.lm_head, self.gradient_checkpointing, self.reshard_after_forward)
 
 
     def forward(

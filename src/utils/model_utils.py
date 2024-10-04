@@ -16,7 +16,8 @@ from transformers.activations import ACT2FN
 
 def apply_fsdp(
     module: nn.Module,
-    gradient_checkpointing: Optional[bool]=False
+    gradient_checkpointing: Optional[bool]=False,
+    reshard: Optional[bool]=True
 ) -> nn.Module:
     """ Apply fully sharded parallelism to a module,
     with optional gradient checkpointing and tuned settings.
@@ -30,7 +31,7 @@ def apply_fsdp(
     """
     return FSDP(
         checkpoint_module(module) if gradient_checkpointing else module,
-        reshard_after_forward=True,
+        reshard_after_forward=reshard,
         flatten_parameters=True,
         execute_sharding_on_init=True,
         optimization_barrier_in_forward=False,
@@ -57,7 +58,7 @@ class ReZeroIO(nn.Module):
             eps (float, optional): epsilon for normalization. Defaults to 1e-5.
         """
         super().__init__()
-        self.norm = nn.LayerNorm(hidden_size, eps=eps, elementwise_affine=True)
+        self.norm = nn.RMSNorm(hidden_size, eps=eps, elementwise_affine=True)
         self.filter = nn.Parameter(torch.zeros(1, 1, hidden_size))
 
 

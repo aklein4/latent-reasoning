@@ -20,6 +20,7 @@ class XLAConfig(PretrainedConfig):
         eos_token_id=None,
         pad_token_id=None,
         gradient_checkpointing=False,
+        reshard_after_forward=False,
         *args,
         **kwargs,
     ):
@@ -44,6 +45,8 @@ class XLAConfig(PretrainedConfig):
 
         self.vocab_size = vocab_size
         self.max_sequence_length = max_sequence_length
+
+        self.reshard_after_forward = reshard_after_forward
 
         # requires workaround
         tmp_gradient_checkpointing = gradient_checkpointing
