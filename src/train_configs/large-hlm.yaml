@@ -6,8 +6,8 @@ stream_dataset: true
 
 sequence_length: 256
 
-bs: 2048
-mini_bs: 16
+bs: 256
+mini_bs: 8
 
 warmup_steps: 2000
 lr_steps: 20000
