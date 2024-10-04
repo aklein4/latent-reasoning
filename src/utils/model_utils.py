@@ -39,10 +39,10 @@ def apply_fsdp(
     return FSDP(
         checkpoint_module(module) if gradient_checkpointing else module,
         reshard_after_forward=reshard,
-        flatten_parameters=True,
+        flatten_parameters=False,
         execute_sharding_on_init=True,
-        optimization_barrier_in_forward=True,
-        optimization_barrier_in_backward=True,
+        optimization_barrier_in_forward=False,
+        optimization_barrier_in_backward=False,
         mark_step_on_finalization=False,
         disable_reshard_on_root=True,
         compute_dtype=torch.bfloat16,
