@@ -14,6 +14,8 @@ import numpy as np
 
 from transformers.activations import ACT2FN
 
+import utils.constants as constants
+
 
 def apply_checkpointing(
     module: nn.Module,
@@ -188,12 +190,16 @@ class FusedLinear(nn.Module):
 
         # apply linear
         if self.use_mask:
-            assert not hasattr(self.linear, '_xla_checkpointed_forward_original')
-            x = XLAPatchedLinear.apply(
-                x,
-                self.linear.weight * self.mask,
-                self.linear.bias
-            )
+            if constants.XLA_AVAILABLE:
+                assert not hasattr(self.linear, '_xla_checkpointed_forward_original')
+                x = XLAPatchedLinear.apply(
+                    x,
+                    self.linear.weight * self.mask,
+                    self.linear.bias
+                )
+            else:
+                x = F.linear(x, self.linear.weight * self.mask, self.linear.bias)
+        
         else:
             x = self.linear(x)
 
