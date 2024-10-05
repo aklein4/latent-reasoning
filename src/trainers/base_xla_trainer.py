@@ -14,7 +14,6 @@ import huggingface_hub as hf
 
 import utils.constants as constants
 from utils.data_utils import DotDict
-from utils.optimization_utils import LowPrecisionAdafactor
 from utils.logging_utils import LogSection, log_print, log_master_print
 
 
@@ -107,7 +106,7 @@ class BaseXLATrainer:
 
         ckpt = {
             "model": model.state_dict(),
-            # "shard_metadata": model.get_shard_metadata(),
+            "shard_metadata": model.get_shard_metadata(),
         }
         if self.save_optimizer:
             ckpt["optimizer"] = optimizer.state_dict(),
@@ -135,10 +134,6 @@ class BaseXLATrainer:
         
 
     def get_optimizer(self, model):
-        return LowPrecisionAdafactor(
-            model.parameters(), lr=self.start_lr,
-            **self.optimizer_kwargs
-        )
         return syncfree.AdamW(
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
@@ -224,12 +219,12 @@ class BaseXLATrainer:
                 # get results from train step
                 
                 # fsdp handles autocast
-                with autocast(constants.XLA_DEVICE()):
-                    results = self.train_step(
-                        curr_step,
-                        model,
-                        *mini_batch
-                    )
+                # with autocast(constants.XLA_DEVICE()):
+                results = self.train_step(
+                    curr_step,
+                    model,
+                    *mini_batch
+                )
 
                 # scale results for accumulation
                 # reductions are done by averaging across devices, summing across mini batches
@@ -251,8 +246,8 @@ class BaseXLATrainer:
                     xm.mark_step()
 
             # perform a single optimizer step
-            # if self.clip_grad_norm is not None:
-            #     model.clip_grad_norm_(self.clip_grad_norm)
+            if self.clip_grad_norm is not None:
+                model.clip_grad_norm_(self.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=(num_mini_batches == 1))
 
