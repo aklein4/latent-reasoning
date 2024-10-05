@@ -187,8 +187,7 @@ class BaseXLATrainer:
         token_tracker = xm.RateTracker()
 
         # run loop
-        xm.rendezvous("Train!")
-        log_master_print("Train!")
+        log_print("Train!")
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
 

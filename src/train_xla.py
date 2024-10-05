@@ -61,8 +61,7 @@ def _mp_fn(index, args):
         },
         train_config["stream_dataset"]
     )
-    xm.rendezvous("Data Loaded!")
-    log_master_print("Data Loaded!")
+    log_print("Data Loaded!")
 
     log_print("Loading trainer...")
     trainer_type = train_config["trainer_type"]
@@ -72,8 +71,7 @@ def _mp_fn(index, args):
         train_config,
         debug=args.debug
     )
-    xm.rendezvous("Trainer Loaded!")
-    log_master_print("Trainer Loaded!")
+    log_print("Trainer Loaded!")
 
     trainer.train(
         model,
