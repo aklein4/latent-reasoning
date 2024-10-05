@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 try:
     from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
+    from torch_xla.distributed.fsdp.utils import XLAPatchedLinear
 except:
     pass
 
@@ -186,8 +187,9 @@ class FusedLinear(nn.Module):
             self._error_message(inputs)
 
         # apply linear
-        if self.use_mask and False:
-            x = F.linear(
+        if self.use_mask:
+            assert not hasattr(self.linear, '_xla_checkpointed_forward_original')
+            x = XLAPatchedLinear.apply(
                 x,
                 self.linear.weight * self.mask,
                 self.linear.bias
