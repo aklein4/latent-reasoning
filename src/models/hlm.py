@@ -719,11 +719,11 @@ class HLmModel(XLAModel):
 
 
     def init_fsdp(self):
-        self.encoder.init_fsdp()
-        self.generator.init_fsdp()
-        self.decoder.init_fsdp()
+        # self.encoder.init_fsdp()
+        # self.generator.init_fsdp()
+        # self.decoder.init_fsdp()
 
-        return apply_fsdp(self, False)
+        return apply_fsdp(self, False, False)
 
 
     def forward(

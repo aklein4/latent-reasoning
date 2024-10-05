@@ -38,9 +38,7 @@ def _mp_fn(index, args):
     model_type_config = CONFIG_DICT[model_type](**model_config)
     model = MODEL_DICT[model_type](model_type_config)
     model = model.init_fsdp()
-    xm.mark_step()
-    xm.rendezvous("Model Loaded!")
-    log_master_print("Model Loaded!")
+    log_print("Model Loaded!")
 
     """ FSDP handles this """
     # model = model.to(constants.XLA_DEVICE())
@@ -87,7 +85,7 @@ if __name__ == '__main__':
   
     # setup PJRT runtime
     os.environ['PJRT_DEVICE'] = 'TPU'
-    os.environ['XLA_NO_SPECIAL_SCALARS'] = '1'
+    # os.environ['XLA_NO_SPECIAL_SCALARS'] = '1'
 
     # debugging
     # os.environ['PT_XLA_DEBUG'] = '1'
