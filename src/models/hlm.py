@@ -136,7 +136,7 @@ class LmHead(nn.Module):
 
     def __init__(self, config: HLmConfig):
         super().__init__()
-        self.norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, elementwise_affine=True)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, hidden_states):
