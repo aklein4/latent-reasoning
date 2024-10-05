@@ -14,6 +14,7 @@ import huggingface_hub as hf
 
 import utils.constants as constants
 from utils.data_utils import DotDict
+from utils.optimization_utils import LowPrecisionAdafactor
 from utils.logging_utils import LogSection, log_print, log_master_print
 
 
@@ -134,6 +135,10 @@ class BaseXLATrainer:
         
 
     def get_optimizer(self, model):
+        return LowPrecisionAdafactor(
+            model.parameters(), lr=self.start_lr,
+            **self.optimizer_kwargs
+        )
         return syncfree.AdamW(
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs

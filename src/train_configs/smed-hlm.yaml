@@ -19,11 +19,18 @@ start_lr: 0.0003
 end_lr: 0.00003
 
 optimizer_kwargs:
-    betas: [0.9, 0.95]
-    eps: 0.00000001
+    beta1: 0.9
     weight_decay: 0.1
 
-clip_grad_norm: 1.0
+    scale_parameter: false
+    relative_step: false
+
+# optimizer_kwargs:
+#     betas: [0.9, 0.95]
+#     eps: 0.00000001
+#     weight_decay: 0.1
+
+# clip_grad_norm: 1.0
 
 kl_w: 1.0
 kl_smooth_w: 0.1
