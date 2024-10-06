@@ -12,7 +12,7 @@ mlp_size: 2048
 attention_head_size: 64
 num_attention_heads: 12
 num_iaf_attention_heads: 4
-use_register: true
+use_register: false
 
 num_layers: 24
 num_decoder_layers: 8

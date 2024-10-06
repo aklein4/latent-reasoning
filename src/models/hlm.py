@@ -195,7 +195,7 @@ class HLmEncoderLayer(nn.Module):
         self.attention = RotaryAttention(
             config.attention_head_size,
             config.num_attention_heads,
-            True,
+            False, # True,
             True,
             config.rope_fraction,
             config.max_sequence_length,
@@ -225,6 +225,8 @@ class HLmEncoderLayer(nn.Module):
 
     @torch.no_grad()
     def get_iaf_attn_mask(self, attn_mask):
+        return attn_mask
+
         # expand the mask to number of heads
         attn_mask = attn_mask.expand(-1, self.num_attn_heads, -1, -1).clone()
 
@@ -267,7 +269,7 @@ class HLmEncoderLayer(nn.Module):
 
         # get transformer inputs
         q, kv, mlp_gate, mlp_val = self.up(x)
-        kv = kv + self.iaf_up(next_noise)
+        # kv = kv + self.iaf_up(next_noise)
 
         # get transformer outputs
         attn_out = self.attention(
