@@ -115,6 +115,7 @@ class BaseXLATrainer:
             log_print("finished saving checkpoint")
 
             with open(config_path, 'w') as f:
+                log_print(model.config_to_save)
                 json.dump(model.config_to_save, f, indent=4)
             log_print("finished saving config")
 
