@@ -27,6 +27,7 @@ class XLAConfig(PretrainedConfig):
         pad_token_id=None,
         gradient_checkpointing=False,
         reshard_after_forward=False,
+        config_to_save=None,
         *args,
         **kwargs,
     ):
@@ -53,6 +54,8 @@ class XLAConfig(PretrainedConfig):
         self.max_sequence_length = max_sequence_length
 
         self.reshard_after_forward = reshard_after_forward
+
+        self.config_to_save = config_to_save
 
         # requires workaround
         tmp_gradient_checkpointing = gradient_checkpointing

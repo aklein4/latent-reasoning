@@ -7,7 +7,7 @@ from torch_xla.amp import autocast, syncfree
 
 import os
 import numpy as np
-import shutil
+import json
 
 import wandb
 import huggingface_hub as hf
@@ -95,7 +95,11 @@ class BaseXLATrainer:
             os.makedirs(tmp_path, exist_ok=True)
             ckpt_path = os.path.join(
                 tmp_path,
-                f"state_dict.pt"
+                f"checkpoint.ckpt"
+            )
+            config_path = os.path.join(
+                tmp_path,
+                f"config.json"
             )
             log_print("finished creating paths")
                 
@@ -110,7 +114,8 @@ class BaseXLATrainer:
             xm.save(ckpt, ckpt_path)
             log_print("finished saving checkpoint")
 
-            model.config.to_json_file(tmp_path)
+            with open(config_path, 'w') as f:
+                json.dump(self.config.config_to_save, f, indent=4)
             log_print("finished saving config")
 
             api = hf.HfApi()
