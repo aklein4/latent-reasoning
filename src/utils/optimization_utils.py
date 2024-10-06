@@ -57,7 +57,7 @@ class LowPrecisionAdafactor(Adafactor):
 
                 p_data_fp32 = state.get("w_fp32", p)
                 for k, v in state.items():
-                    if v.dtype != p_data_fp32.dtype:
+                    if isinstance(v, torch.Tensor) and v.dtype != p_data_fp32.dtype:
                         state[k] = v.to(p_data_fp32.dtype)
 
                 state["step"] += 1
@@ -99,7 +99,7 @@ class LowPrecisionAdafactor(Adafactor):
                     p.copy_(p_data_fp32)
                 
                     for k, v in state.items():
-                        if k != "w_fp32":
+                        if k != "w_fp32" and isinstance(v, torch.Tensor):
                             state[k] = v.to(grad.dtype)
 
         return loss
