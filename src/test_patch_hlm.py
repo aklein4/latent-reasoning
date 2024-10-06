@@ -33,11 +33,11 @@ def main():
     print(f"Generator: {sum([p.numel() for p in model.generator.parameters()]):_}")
     print(f"Decoder: {sum([p.numel() for p in model.decoder.parameters()]):_}")
 
-    logits, kl, uncond_kl = model(x, mask, num_uncond=1)
+    logits, kl, smooth_kl = model(x, mask)
 
     print(logits.shape)
-    print(uncond_kl)
     print(kl)
+    print(smooth_kl)
 
 
 if __name__ == '__main__':
