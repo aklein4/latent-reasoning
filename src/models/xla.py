@@ -93,6 +93,7 @@ class XLAModel(PreTrainedModel):
         super().__init__(*args, **kwargs)
 
         self._fast_start = fast_start
+        self.config_to_save = self.config.config_to_save
 
 
     def post_init(self):
