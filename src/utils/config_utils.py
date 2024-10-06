@@ -31,9 +31,6 @@ def load_model_config(
     # get vocab size
     config["vocab_size"] = constants.GPT2_VOCAB_SIZE
 
-    # nest the config (TODO: default saving not working)
-    config['config_to_save'] = config
-
     return config
 
 
