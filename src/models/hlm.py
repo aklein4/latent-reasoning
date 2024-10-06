@@ -145,7 +145,7 @@ class LmHead(nn.Module):
         return F.log_softmax(
             lm_logits,
             dim=-1,
-            dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
+            # dtype=(torch.bfloat16 if constants.XLA_AVAILABLE else None)
         )
 
 
