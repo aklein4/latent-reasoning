@@ -62,8 +62,6 @@ def _mp_fn(index, args):
     log_print("Data Loaded!")
 
     log_print("Loading trainer...")
-    train_config['model_config'] = model.config.to_diff_dict()
-
     trainer_type = train_config["trainer_type"]
     trainer = TRAINER_DICT[trainer_type](
         args.project,
