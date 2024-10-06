@@ -82,7 +82,6 @@ class HLmConfig(XLAConfig):
         self.num_attention_heads = num_attention_heads
         self.num_iaf_attention_heads = num_iaf_attention_heads
         self.use_register = use_register
-        assert use_register is not None
 
         self.num_layers = num_layers
         self.num_decoder_layers = num_decoder_layers

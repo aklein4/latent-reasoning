@@ -107,6 +107,8 @@ class BaseXLATrainer:
 
             xm.save(ckpt, ckpt_path)
 
+            model.config.save_pretrained(tmp_path, push_to_hub=False)
+
             api = hf.HfApi()
             out_path = f"{step:012d}"
                 
