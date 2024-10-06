@@ -109,7 +109,7 @@ class BaseXLATrainer:
             xm.save(ckpt, ckpt_path)
             log_print("finished saving checkpoint")
 
-            model.config.save_pretrained(tmp_path, push_to_hub=False)
+            model.config.to_json_file(tmp_path)
             log_print("finished saving config")
 
             api = hf.HfApi()
