@@ -6,28 +6,6 @@ import math
 
 
 class LowPrecisionAdafactor(Adafactor):
-    def __init__(
-        self,
-        params,
-        low_precision=True,
-        factored_threshold=16384,
-        **kwargs
-    ):
-        super().__init__(
-            params,
-            **kwargs
-        )
-
-        self.low_precision = low_precision
-        self.factored_threshold = factored_threshold
-
-
-    @staticmethod
-    def _get_options(param_group, param_shape, factored_threshold):
-        factored = math.prod(param_shape) >= factored_threshold
-        use_first_moment = param_group["beta1"] is not None
-        return factored, use_first_moment
-
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -46,16 +24,19 @@ class LowPrecisionAdafactor(Adafactor):
             for p in group["params"]:
                 if p.grad is None:
                     continue
+
                 grad = p.grad
-                if grad.dtype in {torch.float16, torch.bfloat16}:
-                    grad = grad.float()
                 if grad.is_sparse:
                     raise RuntimeError("Adafactor does not support sparse gradients.")
 
-                state = self.state[p]
-                grad_shape = grad.shape
+                assert p.dtype == grad.dtype, f"Mismatch between parameter dtype ({p.dtype}) and gradient dtype ({grad.dtype})"
+                low_precision = grad.dtype in {torch.bfloat16, torch.float16}
 
-                factored, use_first_moment = self._get_options(group, grad_shape, self.factored_threshold)
+                state = self.state[p]
+                
+                grad_shape = grad.shape
+                factored, use_first_moment = self._get_options(group, grad_shape)
+                
                 # State Initialization
                 if len(state) == 0:
                     state["step"] = 0
@@ -70,18 +51,14 @@ class LowPrecisionAdafactor(Adafactor):
                         state["exp_avg_sq"] = torch.zeros_like(grad)
 
                     state["RMS"] = 0
-                else:
-                    if use_first_moment:
-                        state["exp_avg"] = state["exp_avg"].to(grad)
-                    if factored:
-                        state["exp_avg_sq_row"] = state["exp_avg_sq_row"].to(grad)
-                        state["exp_avg_sq_col"] = state["exp_avg_sq_col"].to(grad)
-                    else:
-                        state["exp_avg_sq"] = state["exp_avg_sq"].to(grad)
 
-                p_data_fp32 = p
-                if p.dtype in {torch.float16, torch.bfloat16}:
-                    p_data_fp32 = p_data_fp32.float()
+                    if low_precision:
+                        state["w_fp32"] = p.float()
+
+                p_data_fp32 = state.get("w_fp32", p)
+                for k, v in state.items():
+                    if v.dtype != p_data_fp32.dtype:
+                        state[k] = v.to(p_data_fp32.dtype)
 
                 state["step"] += 1
                 state["RMS"] = self._rms(p_data_fp32)
@@ -118,15 +95,11 @@ class LowPrecisionAdafactor(Adafactor):
 
                 p_data_fp32.add_(-update)
 
-                if p.dtype in {torch.float16, torch.bfloat16}:
+                if low_precision:
                     p.copy_(p_data_fp32)
-
-                # downcast the state
-                if (
-                    self.low_precision and
-                    use_first_moment and
-                    factored
-                ):
-                    state["exp_avg"] = state["exp_avg"].to(torch.bfloat16)
+                
+                    for k, v in state.items():
+                        if k != "w_fp32":
+                            state[k] = v.to(grad.dtype)
 
         return loss
