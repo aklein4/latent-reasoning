@@ -242,4 +242,6 @@ class PatchHLmModel(XLAModel):
         smooth_kl = torch.repeat_interleave(smooth_kl/self.patch_size, self.patch_size, dim=1)
         smooth_kl = torch.where(og_mask, smooth_kl, torch.zeros_like(smooth_kl))
 
+        lm_logits = lm_logits.view(bs, seq_len*self.patch_size, -1)
+
         return lm_logits, kl, smooth_kl
