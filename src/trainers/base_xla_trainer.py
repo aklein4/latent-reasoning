@@ -139,10 +139,10 @@ class BaseXLATrainer:
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
         )
-        return syncfree.AdamW(
-            model.parameters(), lr=self.start_lr,
-            **self.optimizer_kwargs
-        )
+        # return syncfree.AdamW(
+        #     model.parameters(), lr=self.start_lr,
+        #     **self.optimizer_kwargs
+        # )
 
 
     def get_scheduler(self, optimizer):
