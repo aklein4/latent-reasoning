@@ -99,9 +99,10 @@ class BaseXLATrainer:
             )
             log_print("finished creating paths")
                 
-            ckpt = model.state_dict()
+            ckpt = {
+                "model": model.state_dict(),
+            }
             if self.save_optimizer:
-                raise NotImplementedError("Saving optimizer state not implemented!")
                 ckpt["optimizer"] = optimizer.state_dict()
                 ckpt["lr_scheduler"] = lr_scheduler.state_dict()
             log_print("finished creating checkpoint")
