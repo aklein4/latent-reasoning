@@ -11,10 +11,10 @@ import shutil
 
 import wandb
 import huggingface_hub as hf
+from transformers.optimization import Adafactor
 
 import utils.constants as constants
 from utils.data_utils import DotDict
-from utils.optimization_utils import LowPrecisionAdafactor
 from utils.logging_utils import LogSection, log_print, log_master_print
 
 
@@ -135,10 +135,10 @@ class BaseXLATrainer:
         
 
     def get_optimizer(self, model):
-        # return LowPrecisionAdafactor(
-        #     model.parameters(), lr=self.start_lr,
-        #     **self.optimizer_kwargs
-        # )
+        return Adafactor(
+            model.parameters(), lr=self.start_lr,
+            **self.optimizer_kwargs
+        )
         return syncfree.AdamW(
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
@@ -250,11 +250,11 @@ class BaseXLATrainer:
                 if num_mini_batches > 1 and mini_batch_id < num_mini_batches - 1:
                     xm.mark_step()
 
-            # perform a single optimizer step
-            if self.clip_grad_norm is not None:
-                model.clip_grad_norm_(self.clip_grad_norm)
-            # xm.optimizer_step(optimizer)
-            optimizer.step()
+            # # perform a single optimizer step
+            # if self.clip_grad_norm is not None:
+            #     model.clip_grad_norm_(self.clip_grad_norm)
+            xm.optimizer_step(optimizer)
+            # optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
             # update lr

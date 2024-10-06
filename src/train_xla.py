@@ -37,18 +37,16 @@ def _mp_fn(index, args):
     model_type = model_config.pop("model_type")
     model_type_config = CONFIG_DICT[model_type](**model_config)
     model = MODEL_DICT[model_type](model_type_config)
-    model = model.init_fsdp()
+    # model = model.init_fsdp()
+    model = model.to(torch.bfloat16)
     log_print("Model Loaded!")
 
     """ FSDP handles this """
-    # model = model.to(constants.XLA_DEVICE())
-    # if not args.debug:
-    #     log_print("Syncing model...")
-
-    #     # broadcast with bfloat16 for speed
-    #     model = model.to(torch.bfloat16)
-    #     xm.broadcast_master_param(model)
-    #     model = model.to(torch.float32)
+    model = model.to(constants.XLA_DEVICE())
+    if not args.debug:
+        log_print("Syncing model...")
+        xm.broadcast_master_param(model)
+        log_print("Model Synced!")
 
     log_print("Loading data...")
     loader = get_loader(
