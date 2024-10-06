@@ -6,17 +6,17 @@ stream_dataset: true
 
 sequence_length: 256
 
-bs: 8192
-mini_bs: 128
+bs: 6144
+mini_bs: 96
 
-warmup_steps: 500
-lr_steps: 5000
+warmup_steps: 1000
+lr_steps: 10000
 
-checkpoint_interval: 500
+checkpoint_interval: 1000
 save_optimizer: false
 
-start_lr: 0.008
-end_lr: 0.0008
+start_lr: 0.0006
+end_lr: 0.00006
 
 optimizer_kwargs:
     beta1: 0.9
