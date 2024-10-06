@@ -802,7 +802,7 @@ class HLmModel(XLAModel):
             )
 
         # pass through the generator
-        z, _ = self.generator(input_ids, mask, noise=noise)
+        z, _, _ = self.generator(input_ids, mask, noise=noise)
 
         # get z for the decoder
         z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
