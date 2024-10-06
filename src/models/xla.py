@@ -1,6 +1,12 @@
 import torch
 
+try:
+    from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
+except:
+    pass
+
 from transformers.modeling_utils import PretrainedConfig, PreTrainedModel
+
 
 from utils.logging_utils import log_print
 from utils.model_utils import apply_fsdp
@@ -84,6 +90,13 @@ class XLAModel(PreTrainedModel):
         super().__init__(*args, **kwargs)
 
         self._fast_start = fast_start
+
+
+    def post_init(self):
+        super().post_init()
+
+        if constants.XLA_AVAILABLE:
+            apply_xla_patch_to_nn_linear(self)
 
 
     def init_weights(self):

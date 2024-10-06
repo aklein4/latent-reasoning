@@ -7,7 +7,7 @@ from utils.config_utils import load_model_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'smed-hlm'
+MODEL_CONFIG = 'test-hlm'
 
 
 def main():
@@ -32,7 +32,6 @@ def main():
     print(f"Encoder: {sum([p.numel() for p in model.encoder.parameters()]):_}")
     print(f"Generator: {sum([p.numel() for p in model.generator.parameters()]):_}")
     print(f"Decoder: {sum([p.numel() for p in model.decoder.parameters()]):_}")
-    return
 
     logits, kl, smooth_kl = model(x, mask)
 

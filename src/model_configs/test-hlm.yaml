@@ -28,4 +28,4 @@ z_mlp_mult: 5
 
 z_output_layers: 3
 
-gradient_checkpointing: true
+gradient_checkpointing: false
