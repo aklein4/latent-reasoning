@@ -484,10 +484,10 @@ class HLmEncoder(nn.Module):
 
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
+        self.input_module = apply_fsdp(self.input_module, False, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_fsdp(layer, False, self.reshard_after_forward)
 
         # self.input_module = apply_checkpointing(self.input_module, self.gradient_checkpointing)
 
@@ -579,10 +579,10 @@ class HLmGenerator(nn.Module):
 
 
     def init_fsdp(self):
-        self.input_module = apply_fsdp(self.input_module, self.gradient_checkpointing, self.reshard_after_forward)
+        self.input_module = apply_fsdp(self.input_module, False, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_fsdp(layer, False, self.reshard_after_forward)
 
         # self.input_module = apply_checkpointing(self.input_module, self.gradient_checkpointing)
 
@@ -652,12 +652,12 @@ class HLmDecoder(nn.Module):
 
 
     def init_fsdp(self):
-        self.z_proj = apply_fsdp(self.z_proj, self.gradient_checkpointing, self.reshard_after_forward)
+        self.z_proj = apply_fsdp(self.z_proj, False, self.reshard_after_forward)
 
         for i, layer in enumerate(self.layers):
-            self.layers[i] = apply_fsdp(layer, self.gradient_checkpointing, self.reshard_after_forward)
+            self.layers[i] = apply_fsdp(layer, False, self.reshard_after_forward)
 
-        self.lm_head = apply_fsdp(self.lm_head, self.gradient_checkpointing, self.reshard_after_forward)
+        self.lm_head = apply_fsdp(self.lm_head, False, self.reshard_after_forward)
 
         # self.z_proj = apply_checkpointing(self.z_proj, self.gradient_checkpointing)
 
@@ -733,14 +733,20 @@ class HLmModel(XLAModel):
         self.generator = HLmGenerator(config)
         self.decoder = HLmDecoder(config)
 
+        self.gradient_checkpointing = False
+
         # Initialize weights and apply final processing
         self.post_init()
 
 
     def init_fsdp(self):
-        # self.encoder.init_fsdp()
-        # self.generator.init_fsdp()
-        # self.decoder.init_fsdp()
+        self.encoder.init_fsdp()
+        self.generator.init_fsdp()
+        self.decoder.init_fsdp()
+
+        self.encoder = apply_checkpointing(self.encoder, self.gradient_checkpointing)
+        self.generator = apply_checkpointing(self.generator, self.gradient_checkpointing)
+        self.decoder = apply_checkpointing(self.decoder, self.gradient_checkpointing)
 
         return apply_fsdp(self, False, self.config.reshard_after_forward)
 
