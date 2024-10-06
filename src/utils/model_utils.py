@@ -42,7 +42,7 @@ def apply_fsdp(
     return FSDP(
         checkpoint_module(module) if gradient_checkpointing else module,
         reshard_after_forward=reshard,
-        flatten_parameters=True,
+        flatten_parameters=False,
         execute_sharding_on_init=True,
         optimization_barrier_in_forward=False,
         optimization_barrier_in_backward=False,
@@ -51,7 +51,7 @@ def apply_fsdp(
         compute_dtype=torch.bfloat16,
         buffer_dtype=torch.bfloat16,
         fp32_reduce_scatter=False,
-        # shard_param_on_dim_0=True
+        shard_param_on_dim_0=True
     )
 
 
