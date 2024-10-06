@@ -135,14 +135,14 @@ class BaseXLATrainer:
         
 
     def get_optimizer(self, model):
-        return LowPrecisionAdafactor(
-            model.parameters(), lr=self.start_lr,
-            **self.optimizer_kwargs
-        )
-        # return syncfree.AdamW(
+        # return LowPrecisionAdafactor(
         #     model.parameters(), lr=self.start_lr,
         #     **self.optimizer_kwargs
         # )
+        return syncfree.AdamW(
+            model.parameters(), lr=self.start_lr,
+            **self.optimizer_kwargs
+        )
 
 
     def get_scheduler(self, optimizer):
@@ -192,6 +192,7 @@ class BaseXLATrainer:
         token_tracker = xm.RateTracker()
 
         # run loop
+        xm.mark_step()
         log_print("Train!")
         for batch in loader:
             # batch should be tuple of tensors, each with the same batch size
@@ -223,12 +224,12 @@ class BaseXLATrainer:
                 # get results from train step
                 
                 # fsdp handles autocast
-                with autocast(constants.XLA_DEVICE()):
-                    results = self.train_step(
-                        curr_step,
-                        model,
-                        *mini_batch
-                    )
+                # with autocast(constants.XLA_DEVICE()):
+                results = self.train_step(
+                    curr_step,
+                    model,
+                    *mini_batch
+                )
 
                 # scale results for accumulation
                 # reductions are done by averaging across devices, summing across mini batches
@@ -250,10 +251,10 @@ class BaseXLATrainer:
                     xm.mark_step()
 
             # perform a single optimizer step
-            # if self.clip_grad_norm is not None:
-            #     model.clip_grad_norm_(self.clip_grad_norm)
-            xm.optimizer_step(optimizer)
-            # optimizer.step()
+            if self.clip_grad_norm is not None:
+                model.clip_grad_norm_(self.clip_grad_norm)
+            # xm.optimizer_step(optimizer)
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
             # update lr

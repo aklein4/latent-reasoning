@@ -6,31 +6,31 @@ stream_dataset: true
 
 sequence_length: 256
 
-bs: 2048
-mini_bs: 128
+bs: 512
+mini_bs: 32
 
-warmup_steps: 1000
-lr_steps: 10000
+warmup_steps: 8000
+lr_steps: 80000
 
-checkpoint_interval: 2000
+checkpoint_interval: 20000
 save_optimizer: false
 
-start_lr: 0.0006
-end_lr: 0.00006
-
-optimizer_kwargs:
-    beta1: 0.9
-    weight_decay: 0.1
-
-    scale_parameter: false
-    relative_step: false
+start_lr: 0.0002
+end_lr: 0.00002
 
 # optimizer_kwargs:
-#     betas: [0.9, 0.95]
-#     eps: 0.00000001
+#     beta1: 0.9
 #     weight_decay: 0.1
 
-# clip_grad_norm: 1.0
+#     scale_parameter: false
+#     relative_step: false
+
+optimizer_kwargs:
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.1
+
+clip_grad_norm: 1.0
 
 kl_w: 1.0
 kl_smooth_w: 0.1
