@@ -95,17 +95,16 @@ class BaseXLATrainer:
             os.makedirs(tmp_path, exist_ok=True)
             ckpt_path = os.path.join(
                 tmp_path,
-                f"checkpoint.ckpt"
+                f"state_dict.pt"
             )
                 
-            ckpt = {
-                "model": model.state_dict(),
-            }
+            ckpt = model.state_dict()
             if self.save_optimizer:
+                raise NotImplementedError("Saving optimizer state not implemented!")
                 ckpt["optimizer"] = optimizer.state_dict()
                 ckpt["lr_scheduler"] = lr_scheduler.state_dict()
 
-            xm.save(ckpt, ckpt_path, master_only=True)
+            xm.save(ckpt, ckpt_path)
             model.config.save_pretrained(tmp_path, push_to_hub=False)
 
             api = hf.HfApi()

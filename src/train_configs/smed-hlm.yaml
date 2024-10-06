@@ -13,7 +13,7 @@ warmup_steps: 2500
 lr_steps: 25000
 
 checkpoint_interval: 10
-save_optimizer: true
+save_optimizer: false
 
 start_lr: 0.0004
 end_lr: 0.00004
