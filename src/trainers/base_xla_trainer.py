@@ -11,10 +11,10 @@ import shutil
 
 import wandb
 import huggingface_hub as hf
-from transformers.optimization import Adafactor
 
 import utils.constants as constants
 from utils.data_utils import DotDict
+from utils.optimization_utils import LowPrecisionAdafactor
 from utils.logging_utils import LogSection, log_print, log_master_print
 
 
@@ -82,60 +82,45 @@ class BaseXLATrainer:
         lr_scheduler,
         step
     ):
-        if self.debug:
+        if self.debug or not constants.XLA_MAIN():
             return
 
-        xm.rendezvous("creating checkpoint directories...")
-        log_master_print("creating checkpoint paths...")
+        with LogSection("checkpoint saving"):
 
-        # create base checkpoint paths
-        tmp_path = os.path.join(
-            constants.LOCAL_DATA_PATH,
-            "tmp_checkpoint"
-        )
-        ckpt_path = os.path.join(
-            tmp_path,
-            f"rank_{constants.XLA_RANK()}.ckpt"
-        )
-
-        if constants.XLA_LOCAL_MAIN():
-            shutil.rmtree(tmp_path, ignore_errors=True)
+            # create base checkpoint paths
+            tmp_path = os.path.join(
+                constants.LOCAL_DATA_PATH,
+                "tmp_checkpoint"
+            )
             os.makedirs(tmp_path, exist_ok=True)
+            ckpt_path = os.path.join(
+                tmp_path,
+                f"checkpoint.ckpt"
+            )
+                
+            ckpt = {
+                "model": model.state_dict(),
+            }
+            if self.save_optimizer:
+                ckpt["optimizer"] = optimizer.state_dict()
+                ckpt["lr_scheduler"] = lr_scheduler.state_dict()
 
-        xm.rendezvous("saving checkpoint...")
-        log_master_print("saving checkpoint...")
+            xm.save(ckpt, ckpt_path, master_only=True)
+            model.config.save_pretrained(tmp_path, push_to_hub=False)
 
-        ckpt = {
-            "model": model.state_dict(),
-            "shard_metadata": model.get_shard_metadata(),
-        }
-        if self.save_optimizer:
-            ckpt["optimizer"] = optimizer.state_dict(),
-            ckpt["lr_scheduler"] = lr_scheduler.state_dict(),
-        xm.save(ckpt, ckpt_path, master_only=False)
-
-        model.config.save_pretrained(tmp_path, push_to_hub=False)
-
-        xm.rendezvous("syncing checkpoint...")
-        log_master_print("syncing checkpoint...")
-
-        if constants.XLA_LOCAL_MAIN():
-            out_path = f"{step:012d}"
-            
             api = hf.HfApi()
+            out_path = f"{step:012d}"
+                
             api.upload_folder(
                 repo_id=self.save_repo,
                 folder_path=tmp_path,
                 path_in_repo=out_path,
                 repo_type="model"
-           )
-
-        xm.rendezvous("Checkpoint saved!")
-        log_master_print("Checkpoint saved!")
+            )
         
 
     def get_optimizer(self, model):
-        return Adafactor(
+        return LowPrecisionAdafactor(
             model.parameters(), lr=self.start_lr,
             **self.optimizer_kwargs
         )
