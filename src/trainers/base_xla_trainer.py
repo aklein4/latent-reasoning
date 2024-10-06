@@ -97,18 +97,24 @@ class BaseXLATrainer:
                 tmp_path,
                 f"state_dict.pt"
             )
+            log_print("finished creating paths")
                 
             ckpt = model.state_dict()
             if self.save_optimizer:
                 raise NotImplementedError("Saving optimizer state not implemented!")
                 ckpt["optimizer"] = optimizer.state_dict()
                 ckpt["lr_scheduler"] = lr_scheduler.state_dict()
+            log_print("finished creating checkpoint")
 
             xm.save(ckpt, ckpt_path)
+            log_print("finished saving checkpoint")
+
             model.config.save_pretrained(tmp_path, push_to_hub=False)
+            log_print("finished saving config")
 
             api = hf.HfApi()
             out_path = f"{step:012d}"
+            log_print(f"Uploading to {out_path}")
                 
             api.upload_folder(
                 repo_id=self.save_repo,
@@ -116,6 +122,7 @@ class BaseXLATrainer:
                 path_in_repo=out_path,
                 repo_type="model"
             )
+            log_print("finished uploading")
         
 
     def get_optimizer(self, model):
