@@ -525,8 +525,8 @@ class HLmEncoder(nn.Module):
             hidden_states, z, mu, sigma = layer(
                 hidden_states,
                 long_mask,
-                noise[:, :, i],
-                noise[:, :, i+1] if i < len(self.layers)-1 else torch.zeros_like(noise[:, :, 0]),
+                noise[i],
+                noise[i+1] if i < len(self.layers)-1 else torch.zeros_like(noise[0]),
                 attn_mask
             )
 
@@ -536,9 +536,9 @@ class HLmEncoder(nn.Module):
         
         # flip z here for efficiency
         return (
-            torch.stack(zs[::-1], dim=2),
-            torch.stack(mus[::-1], dim=2),
-            torch.stack(sigmas[::-1], dim=2)
+            zs[::-1],
+            mus[::-1],
+            sigmas[::-1]
         )
 
 
@@ -611,8 +611,8 @@ class HLmGenerator(nn.Module):
             hidden_states, z_out, mu, sigma = layer(
                 hidden_states,
                 long_mask,
-                z=(z[:, :, i] if z is not None else None),
-                noise=(noise[:, :, i] if noise is not None else None),
+                z=(z[i] if z is not None else None),
+                noise=(noise[i] if noise is not None else None),
             )
 
             zs.append(z_out)
@@ -621,9 +621,9 @@ class HLmGenerator(nn.Module):
 
         # we don't flip generator zs
         return (
-            torch.stack(zs, dim=2),
-            torch.stack(mus, dim=2),
-            torch.stack(sigmas, dim=2)
+            zs,
+            mus,
+            sigmas
         )
     
 
@@ -756,35 +756,45 @@ class HLmModel(XLAModel):
 
         # sample noise for the encoder
         noise = torch.randn(
-            [bs, seq_len, self.num_layers, self.z_size],
+            [self.num_layers, bs, seq_len, self.z_size],
             device=input_ids.device, dtype=self.encoder.input_module.embs.weight.dtype
         )
 
         # pass through the encoder
-        z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
+        z, enc_mus, enc_sigmas = self.encoder(input_ids, mask, noise)
         
         # pass through the generator
-        _, gen_mu, gen_sigma = self.generator(input_ids, mask, z=z)
+        _, gen_mus, gen_sigmas = self.generator(input_ids, mask, z=z)
 
         # get z for the decoder
-        z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
+        z_out = torch.cat(
+            z[-self.z_output_layers:],
+            dim=-1
+        ).view(bs, seq_len, self.z_output_size)
 
         # pass through the decoder
         lm_logits = self.decoder(mask, z_out)
 
-        kl = (
-            torch.log(gen_sigma) - torch.log(enc_sigma)
-            + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2) / (gen_sigma**2)
-            - 0.5
-        ).sum(-1)
+        # get the kl
+        kls = []
+        for enc_mu, enc_sigma, gen_mu, gen_sigma in zip(enc_mus, enc_sigmas, gen_mus, gen_sigmas):
+            curr_kl = (
+                torch.log(gen_sigma) - torch.log(enc_sigma)
+                + 0.5 * (enc_sigma**2 + (enc_mu-gen_mu)**2) / (gen_sigma**2)
+                - 0.5
+            ).sum(-1)
+            kls.append(curr_kl)
+        kl = torch.stack(kls, dim=-1)
 
-        smooth_mu = enc_mu[:, :, -self.z_output_layers:]
-        smooth_sigma = enc_sigma[:, :, -self.z_output_layers:]
-        smooth_kl = (
-            -torch.log(smooth_sigma)
-            + 0.5 * (smooth_sigma**2 + smooth_mu**2)
-            - 0.5
-        ).sum(-1).sum(-1)
+        # get the smooth kl
+        smooth_kl = 0
+        for enc_mu, enc_sigma in zip(enc_mus[-self.z_output_layers:], enc_sigmas[-self.z_output_layers:]):
+            curr_smooth_kl = (
+                -torch.log(enc_sigma)
+                + 0.5 * (enc_sigma**2 + enc_mu**2)
+                - 0.5
+            ).sum(-1)
+            smooth_kl = smooth_kl + curr_smooth_kl
 
         return lm_logits, kl, smooth_kl
 
