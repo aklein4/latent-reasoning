@@ -30,4 +30,6 @@ kl_smooth_w: 0.1
 kl_collapse_w: 1.0
 token_w: 50.0
 
+collapse_steps: 8000
+
 clip_prob: 0.75

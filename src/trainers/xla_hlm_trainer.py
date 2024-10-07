@@ -25,12 +25,12 @@ class XLAHLmTrainer(BaseXLATrainer):
             kl = kl.sum(-1)
         return kl.mean()
 
-    def loss(self, token_loss, kl_loss, kl_smooth_loss, kl_collapse):
+    def loss(self, token_loss, kl_loss, kl_smooth_loss, kl_collapse, collapse_scale):
         # if either clip triggers, only use kl
         return (
             self.kl_w * kl_loss +
             self.kl_smooth_w * kl_smooth_loss +
-            self.kl_collapse_w * kl_collapse +
+            collapse_scale * self.kl_collapse_w * kl_collapse +
             self.token_w * token_loss
         )
     
@@ -84,6 +84,9 @@ class XLAHLmTrainer(BaseXLATrainer):
         # current version is raw logit clipping
         clip_mask = mask & (log_probs < np.log(self.clip_prob))  # (torch.argmax(logits, dim=-1) != x)
 
+        # get current regularizer weights
+        collapse_scale = max(0, 1 - (step / self.collapse_steps))
+
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
             kl_loss=self.kl_loss(kl),
@@ -102,12 +105,15 @@ class XLAHLmTrainer(BaseXLATrainer):
             
             kl_smooth_per_token=self.kl_per_token(smooth_kl, mask, smooth=True),
             kl_smooth_per_token_nopad=self.kl_per_token_nopad(smooth_kl, mask, x, model.config.pad_token_id, smooth=True),
+        
+            collapse_scale=collapse_scale
         )
         results.loss = self.loss(
             results.token_loss,
             results.kl_loss,
             results.kl_smooth_loss,
-            results.kl_collapse
+            results.kl_collapse,
+            collapse_scale
         )
 
         results.one_minus_acc = 1 - results.acc
