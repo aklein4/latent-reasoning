@@ -105,9 +105,8 @@ class XLAHLmTrainer(BaseXLATrainer):
             
             kl_smooth_per_token=self.kl_per_token(smooth_kl, mask, smooth=True),
             kl_smooth_per_token_nopad=self.kl_per_token_nopad(smooth_kl, mask, x, model.config.pad_token_id, smooth=True),
-        
-            collapse_scale=collapse_scale
         )
+        results.collapse_scale = torch.full_like(results.kl_collapse, collapse_scale)
         results.loss = self.loss(
             results.token_loss,
             results.kl_loss,
