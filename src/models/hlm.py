@@ -50,6 +50,8 @@ class HLmConfig(XLAConfig):
             The multiplier for the size of the IAF MLPs.
         z_output_layers (`int`):
             The number of layers to keep of z for use by the decoder.
+        hitch_z (`bool`):
+            Whether to hitch the generator z to the encoder z.
     """
 
     model_type = 'hlm'
@@ -71,6 +73,7 @@ class HLmConfig(XLAConfig):
         z_size=None,
         z_mlp_mult=None,
         z_output_layers=None,
+        hitch_z=False,
         *args,
         **kwargs,
     ):
@@ -94,8 +97,9 @@ class HLmConfig(XLAConfig):
 
         self.z_size = z_size
         self.z_mlp_mult = z_mlp_mult
-
         self.z_output_layers = z_output_layers
+
+        self.hitch_z = hitch_z
 
         super().__init__(*args, **kwargs)
 
@@ -329,6 +333,8 @@ class HLmGeneratorLayer(nn.Module):
         # z scale
         self.z_scale = np.sqrt(1.0 / (config.z_size * config.num_layers))
 
+        self.hitch_z = config.hitch_z
+
 
     def forward(
         self,
@@ -359,6 +365,11 @@ class HLmGeneratorLayer(nn.Module):
             z = mu + sigma * noise # z is zero where noise and mu are zero
         else:
             z = z * float_mask # zero z again, just in case
+
+            if self.hitch_z:
+                implicit_noise = ((z - mu) / sigma).detach()
+                hitch = mu + sigma * implicit_noise
+                z = z + hitch - hitch.detach()
 
         # get transformer outputs
         attn_out = self.attention(

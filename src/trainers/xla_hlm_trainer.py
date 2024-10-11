@@ -85,7 +85,9 @@ class XLAHLmTrainer(BaseXLATrainer):
         clip_mask = mask & (log_probs < np.log(self.clip_prob))  # (torch.argmax(logits, dim=-1) != x)
 
         # get current regularizer weights
-        collapse_scale = max(0, 1 - (step / self.collapse_steps))
+        collapse_scale = 1.0
+        if self.collapse_steps is not None:
+            collapse_scale = max(0, 1 - (step / self.collapse_steps))
 
         results = DotDict(
             token_loss=self.token_loss(log_probs, clip_mask),
