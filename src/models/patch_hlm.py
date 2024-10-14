@@ -245,3 +245,46 @@ class PatchHLmModel(XLAModel):
         lm_logits = lm_logits.view(bs, seq_len*self.patch_size, -1)
 
         return lm_logits, kl, smooth_kl
+
+
+    def sample(
+        self,
+        input_ids,
+        mask,
+        noise=None,
+    ):
+        
+        # reshape to patches
+        input_ids = input_ids.view(
+            input_ids.shape[0],
+            input_ids.shape[1]//self.patch_size,
+            self.patch_size
+        )
+        og_mask = mask
+        mask = mask.view(
+            mask.shape[0],
+            mask.shape[1]//self.patch_size,
+            self.patch_size
+        ).any(dim=-1)
+
+        bs, seq_len, _ = input_ids.shape
+
+        # sample noise for the encoder
+        if noise is None:
+            noise = torch.randn(
+                [bs, seq_len, self.num_layers, self.z_size],
+                device=input_ids.device, dtype=self.encoder.input_module.embs.weight.dtype
+            )
+
+        # pass through the generator
+        z, _, _ = self.generator(input_ids, mask, noise=noise)
+
+        # get z for the decoder
+        z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
+
+        # pass through the decoder
+        lm_logits = self.decoder(mask, z_out)
+
+        lm_logits = lm_logits.view(bs, seq_len*self.patch_size, -1)
+
+        return lm_logits.argmax(-1)
