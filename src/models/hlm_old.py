@@ -825,7 +825,7 @@ class HLmModel(XLAModel):
         # pass through the decoder
         lm_logits = self.decoder(mask, z_out)
 
-        return lm_logits.argmax(-1)
+        return lm_logits
 
 
     def invert(
