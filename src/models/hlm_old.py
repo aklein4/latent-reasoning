@@ -365,6 +365,7 @@ class HLmGeneratorLayer(nn.Module):
             z = mu + sigma * noise # z is zero where noise and mu are zero
         else:
             z = z * float_mask # zero z again, just in case
+            noise = (z - mu) / sigma
 
             if self.hitch_z:
                 implicit_noise = ((z - mu) / sigma).detach()
@@ -384,7 +385,7 @@ class HLmGeneratorLayer(nn.Module):
             mask
         )
 
-        return hidden_states, z, mu, sigma
+        return hidden_states, z, noise, mu, sigma
     
 
 class HLmDecoderLayer(nn.Module):
@@ -613,11 +614,12 @@ class HLmGenerator(nn.Module):
         bs, seq_len = hidden_states.shape[:2]
 
         zs = []
+        noises = []
         mus = []
         sigmas = []
         for i, layer in enumerate(self.layers):
             
-            hidden_states, z_out, mu, sigma = layer(
+            hidden_states, z_out, noise_out, mu, sigma = layer(
                 hidden_states,
                 long_mask,
                 z=(z[:, :, i] if z is not None else None),
@@ -625,12 +627,14 @@ class HLmGenerator(nn.Module):
             )
 
             zs.append(z_out)
+            noises.append(noise_out)
             mus.append(mu)
             sigmas.append(sigma)
 
         # we don't flip generator zs
         return (
             torch.stack(zs, dim=2),
+            torch.stack(noises, dim=2),
             torch.stack(mus, dim=2),
             torch.stack(sigmas, dim=2)
         )
@@ -772,7 +776,7 @@ class HLmModel(XLAModel):
         z, enc_mu, enc_sigma = self.encoder(input_ids, mask, noise)
         
         # pass through the generator
-        _, gen_mu, gen_sigma = self.generator(input_ids, mask, z=z)
+        _, _, gen_mu, gen_sigma = self.generator(input_ids, mask, z=z)
 
         # get z for the decoder
         z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
@@ -813,7 +817,7 @@ class HLmModel(XLAModel):
             )
 
         # pass through the generator
-        z, _, _ = self.generator(input_ids, mask, noise=noise)
+        z, _, _, _ = self.generator(input_ids, mask, noise=noise)
 
         # get z for the decoder
         z_out = z[:, :, -self.z_output_layers:].view(bs, seq_len, self.z_output_size)
@@ -822,3 +826,23 @@ class HLmModel(XLAModel):
         lm_logits = self.decoder(mask, z_out)
 
         return lm_logits.argmax(-1)
+
+
+    def invert(
+        self,
+        input_ids,
+        mask,
+    ):
+        bs, seq_len = input_ids.shape
+
+        # sample noise for the encoder
+        noise = torch.randn(
+            [bs, seq_len, self.num_layers, self.z_size],
+            device=input_ids.device, dtype=self.encoder.input_module.embs.weight.dtype
+        )
+
+        # pass through the encoder
+        z = self.encoder(input_ids, mask, noise)[0]
+        
+        # pass through the generator
+        return self.generator(input_ids, mask, z=z)[1]
