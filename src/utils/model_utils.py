@@ -404,6 +404,27 @@ class RotaryEmbedding(nn.Module):
         return torch.cat((rot, no_rot), dim=-1)
 
 
+class FullGLU(nn.Module):
+
+    def __init__(self, hidden_size, mlp_size, activation):
+        super().__init__()
+
+        self.w_gate = nn.Linear(hidden_size, mlp_size, bias=False)
+        self.w_value = nn.Linear(hidden_size, mlp_size, bias=False)
+        self.w_out = nn.Linear(mlp_size, hidden_size, bias=False)
+
+        self.activation = ACT2FN[activation]
+    
+
+    def forward(self, hidden_states):
+        gate = self.w_gate(hidden_states)
+        value = self.w_value(hidden_states)
+
+        h = self.activation(gate) * value
+
+        return self.w_out(h)
+
+
 class GLU(nn.Module):
 
     def __init__(self, activation):

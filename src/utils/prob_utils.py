@@ -5,7 +5,9 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from utils.model_utils import FusedLinear, GLU
+from transformers.activations import ACT2FN
+
+from utils.model_utils import FusedLinear
 
 
 class GaussianIAF(nn.Module):
@@ -33,7 +35,7 @@ class GaussianIAF(nn.Module):
             mask=self._get_down_mask()
         )
 
-        self.mlp = GLU(activation)
+        self.activation = ACT2FN[activation]
 
 
     @torch.no_grad()
@@ -73,7 +75,7 @@ class GaussianIAF(nn.Module):
         )
 
         # returns concatination of mu and log_sigma
-        return z_bias + self.down(self.mlp(z_gate, z_val))
+        return z_bias + self.down(self.activation(z_gate) * z_val)
 
 
 class PBitModule(nn.Module):

@@ -27,6 +27,6 @@ z_size: 11
 z_mlp_mult: 5
 z_output_layers: 3
 
-hitch_z: true
+serial_steps: 4
 
 gradient_checkpointing: false
