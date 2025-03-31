@@ -2,7 +2,7 @@
 import numpy as np
 import os
 import webdataset as wds
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 import huggingface_hub as hf
 
