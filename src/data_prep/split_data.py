@@ -88,25 +88,24 @@ class TokenizerMap:
             return_tensors="np"
         ).input_ids
         
-        assert np.max(input_ids) < 2**16, f"Input IDs are too large for uint16: {np.max(input_ids)} > {(2**16)-1}"
-        input_ids = input_ids.astype(np.uint16)
-        
         # convert to list
         out = []
         for curr in input_ids:
-            out.append(curr[curr != self.tokenizer.pad_token_id])
+
+            assert np.max(curr) < 2**16, f"Input IDs are too large for uint16: {np.max(curr)} > {(2**16)-1}"
+            curr = curr.astype(np.uint16)
+
+            out.append(curr)
 
         return {"input_ids": out}
 
 
 def create_split(
-    tokenizer,
     token_iterator,
     repo,
     split,
     num_tokens,
-    max_length,
-    min_length,
+    piece_length,
 ):
   
     with HfShardWriter(
@@ -120,31 +119,44 @@ def create_split(
         ) as pbar:
 
             curr_ind = 0
-            while num_tokens is None or q.trunc_count < num_tokens:
+            total_tested = 0
+            total_tokens = 0
+            total_pass = 0
+
+            while num_tokens is None or total_tokens < num_tokens:
                 try:
                     input_ids = next(token_iterator)["input_ids"]
                 except StopIteration:
                     break
 
-                input_ids, segment_ids = q(input_ids)
-                if input_ids is None:
+                total_tested += 1
+                if len(input_ids) < 2 * piece_length:
                     continue
+                total_pass += 1
+
+                inn = input_ids[:piece_length]
+                out = input_ids[piece_length:2*piece_length]
+
+                assert inn.shape == (piece_length,)
+                assert out.shape == (piece_length,)
 
                 sample = {
                     "__key__": f"{curr_ind:012d}",
-                    "input_ids.npy": input_ids,
-                    "segment_ids.npy": segment_ids
+                    "input_ids.npy": inn,
+                    "output_ids.npy": out,
                 }
                 sink.write(sample)
-                curr_ind += 1
 
-                pbar.update(q.trunc_count-pbar.n)
+                curr_ind += 1
+                total_tokens += len(input_ids)
+
+                pbar.update(2*piece_length)
                 pbar.set_postfix(
-                    total=f"{q.trunc_count:_}",
-                    ind=curr_ind,
-                    perc=(q.trunc_count/q.total_count),
-                    q=np.sum(q.filled),
-                    q_perc=np.sum(q.filled)/q.q_size,
+                    total=f"{2*piece_length:_}",
+                    ind=f"{curr_ind:_}",
+                    total_tested=f"{total_tested:_}",
+                    total_pass=f"{total_pass:_}",
+                    pass_freq=f"{total_pass/total_tested:.3f}",
                     refresh=False
                 )
                 
