@@ -1,25 +1,49 @@
 """ Dataloaders for the project. """
 
-from loaders.packed import PackedCollator
-from loaders.seq2seq import Seq2SeqCollator
+from torch.utils.data import DataLoader
+
 from loaders.simple import SimpleCollator
+from loaders.split import SplitCollator
+
 
 COLLATOR_DICT = {
-    "packed": PackedCollator,
-    "seq2seq": Seq2SeqCollator,
+    "split": SplitCollator,
     "simple": SimpleCollator
 }
 
 
 import torch
-try:
-    import torch_xla.distributed.parallel_loader as pl
-except:
-    pass
 
 import datasets
 
 import utils.constants as constants
+
+
+def get_loader(
+    name: str,
+    split: str,
+    bs: int,
+    collator_type: str,
+    collator_kwargs: dict,
+    streaming: bool = True,
+)
+    dataset = datasets.load_dataset(
+        "webdataset",
+        data_files=_get_data_files(name),
+        split=split,
+        streaming=streaming
+    )
+
+    collator = COLLATOR_DICT[collator_type](**collator_kwargs["collator_kwargs"])
+
+    return DataLoader(
+        dataset=dataset,
+        batch_size=bs,
+        collate_fn=collator,
+        shuffle=False,
+        drop_last=True,
+    )
+
 
 
 def _get_data_files(
@@ -41,59 +65,3 @@ def _get_data_files(
         data_files[split] = f"https://huggingface.co/datasets/{constants.HF_ID}/{name}/resolve/main/{split}/*"
     
     return data_files
-
-
-def get_loader(
-    name: str,
-    split: str,
-    bs: int,
-    collator_type,
-    collator_kwargs,
-    streaming: bool = True
-):
-    """ Get an xla token dataloader for the given wds dataset split.
-
-    Args:
-        name (str): Name of the repo to load
-        split (str): split in ["train", "val", "test"]
-        bs (int): batch size
-        collator_kwargs (dict): kwargs for the collator
-        streaming (bool): whether to stream the dataset
-
-    Returns:
-        pl.ParallelLoader: xla dataloader
-    """
-
-    # prepare batch sizes
-    if constants.XLA_AVAILABLE:
-        if bs % constants.NUM_XLA_DEVICES() != 0:
-            raise ValueError(f"Batch size {bs} not divisible by number of devices {constants.NUM_XLA_DEVICES()}")
-        sample_size = bs // constants.NUM_XLA_DEVICES()
-    else:
-        sample_size = bs
-
-    # get streaming dataset
-    dataset = datasets.load_dataset(
-        "webdataset",
-        data_files=_get_data_files(name),
-        split=split, streaming=streaming
-    )
-
-    # wrap in loader with collator
-    collator = COLLATOR_DICT[collator_type](**collator_kwargs)
-    loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=sample_size,
-        collate_fn=collator,
-        drop_last=True,
-        pin_memory=True,
-    )
-
-    if not constants.XLA_AVAILABLE:
-        return loader
-
-    # wrap with xla loader
-    wrapper_type = pl.MpDeviceLoader if constants.NUM_XLA_DEVICES() > 1 else pl.ParallelLoader
-    xm_loader = wrapper_type(loader, device=constants.XLA_DEVICE())
-
-    return xm_loader
