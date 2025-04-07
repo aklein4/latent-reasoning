@@ -9,7 +9,7 @@ from utils.data_utils import load_byte_array
 import utils.constants as constants
 
 
-class SimpleCollator:
+class SplitCollator:
 
     def __init__(
         self,

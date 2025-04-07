@@ -10,5 +10,34 @@ def load_byte_array(
     """ Convert the data from a byte stream to a tensor.
         - see npy_loads() in https://github.com/webdataset/webdataset/blob/main/webdataset/autodecode.py
     """
-    stream = io.BytesIO(data)
-    return np.lib.format.read_array(stream)
+
+    # depending on datasets? versions, sometimes functions that call this will already be in a list?
+    try:
+        stream = io.BytesIO(data)
+        out = np.lib.format.read_array(stream)
+    except:
+        out = np.array(data)
+
+    return out
+
+
+def get_hf_files(
+    hf_id: str,
+    name: str
+):
+    """ Get datafile urls for the given dataset name.
+     - see example at https://huggingface.co/docs/hub/en/datasets-webdataset 
+     - see data_prep.token_wds for repo layout
+     
+    Args:
+        name (str): name of the repo to load
+
+    Returns:
+        Dict[str, str]: dict of splits and their urls
+    """
+    data_files = {}
+    for split in ["train", "val", "test"]:
+
+        data_files[split] = f"https://huggingface.co/datasets/{hf_id}/{name}/resolve/main/{split}/*"
+    
+    return data_files

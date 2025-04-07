@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,18 +21,17 @@ class SplitCollator:
         data,
     ):
 
-        # get list tensors
-        input_ids = [x['input_ids.npy'] for x in data]
-        output_ids = [x['output_ids.npy'] for x in data]
-        try:
-            input_ids = [load_byte_array(x) for x in input_ids]
-            output_ids = [load_byte_array(x) for x in output_ids]
-        except:
-            input_ids = [np.array(x) for x in input_ids]
-            output_ids = [np.array(x) for x in output_ids]
+        # get list of arrays tensors
+        input_ids = [load_byte_array(x['input_ids.npy']) for x in data]
+        output_ids = [load_byte_array(x['output_ids.npy']) for x in data]
 
+        # get list of tensors
         input_ids = [torch.tensor(x.astype(np.int64)).long() for x in input_ids]
         output_ids = [torch.tensor(x.astype(np.int64)).long() for x in output_ids]
+
+        # stack
+        input_ids = torch.stack(input_ids, dim=0).to(constants.DEVICE)
+        output_ids = torch.stack(output_ids, dim=0).to(constants.DEVICE)
 
         return {
             "input_ids": input_ids,
