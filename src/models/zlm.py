@@ -2,13 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers import PreTrainedModel, LlamaConfig, LlamaModel, LlamaForCausalLM
+from transformers import (
+    PreTrainedModel, PretrainedConfig,
+    LlamaModel, LlamaForCausalLM
+)
 
 from utils.dot_dict import DotDict
 from utils.model_utils import unsqueeze_to_batch, expand_to_batch
 
 
-class ZLmConfig(LlamaConfig):
+class ZLmConfig(PretrainedConfig):
     """
     Configuration class for ZLM model.
     This is a subclass of LlamaConfig with additional parameters specific to ZLM.
@@ -259,15 +262,16 @@ class ZLmModel(PreTrainedModel):
         )
 
         # get the decoder lm output
-        self.decoder_lm_logits = self.lm_head(
+        decoder_lm_logits = self.lm_head(
             self.lm_norm(
                 decoder_hidden_states[..., -self.output_length:, :]
             )
         )
+        F.log_softmax(decoder_lm_logits, dim=-1)
 
         return DotDict(
             encoder_mus=encoder_mus,
             decoder_mus=decoder_mus,
-            decoder_lm_logits=self.decoder_lm_logits,
+            lm_logits=decoder_lm_logits,
         )
     

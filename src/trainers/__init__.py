@@ -1,5 +1,7 @@
 """ Training package """
 
+from trainers.zlm_trainer import ZLmTrainer
+
 TRAINER_DICT = {
-    "example": "ExampleTrainer",
+    "zlm": ZLmTrainer,
 }

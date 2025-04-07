@@ -20,6 +20,8 @@ def main(args):
     model_config_obj = CONFIG_DICT[model_type](**model_config)
     model = MODEL_DICT[model_type](model_config_obj).to(constants.DEVICE)
 
+    model.gradient_checkpointing_enable()
+
     print("Loading data...")
     loader = get_loader(
         train_config["ds_type"],

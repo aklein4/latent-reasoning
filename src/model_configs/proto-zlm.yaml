@@ -1,0 +1,14 @@
+
+model_type: zlm
+architectures: [
+    ZLmModel
+]
+
+base_url: TinyLlama/TinyLlama_v1.1
+
+in_length: 128
+out_length: 128
+
+z_length: 512
+
+latent_size: 128
