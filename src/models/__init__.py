@@ -1,9 +1,13 @@
 """ Models """
 
+from models.zlm import ZLmConfig, ZLmModel
+
+
 CONFIG_DICT = {
-    "example": "ExampleConfig",
+    "zlm": ZLmConfig,
 }
 
+
 MODEL_DICT = {
-    "example": "ExampleModel",
+    "zlm": ZLmModel,
 }

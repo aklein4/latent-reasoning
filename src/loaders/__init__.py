@@ -2,6 +2,7 @@
 
 from loaders.split import SplitCollator
 
+
 COLLATOR_DICT = {
     "split": SplitCollator,
 }

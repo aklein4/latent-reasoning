@@ -4,152 +4,192 @@ import torch.nn.functional as F
 
 from transformers import PreTrainedModel, LlamaConfig, LlamaModel, LlamaForCausalLM
 
+from utils.dot_dict import DotDict
+from utils.model_utils import unsqueeze_to_batch, expand_to_batch
 
-class ZLMConfig(LlamaConfig):
+
+class ZLmConfig(LlamaConfig):
     """
     Configuration class for ZLM model.
     This is a subclass of LlamaConfig with additional parameters specific to ZLM.
     """
+
     model_type = "zlm"
     
+
     def __init__(
         self,
+        base_url: str = "meta-llama/Llama-2-7b-chat-hf",
+        input_length: int = 128,
+        output_length: int = 128,
+        z_length: int = 512,
         latent_size: int = 128,
-        use_kl_loss: bool = True,
-        latent_activation: str = "tanh",
+        *args,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        
+        self.base_url = base_url
+
+        self.input_length = input_length
+        self.output_length = output_length
+
+        self.z_length = z_length
         self.latent_size = latent_size
-        self.use_kl_loss = use_kl_loss
-        self.latent_activation = latent_activation
+        
+        super().__init__(*args, **kwargs)
 
 
 class ModulatingRMSNorm(nn.Module):
 
-    def __init__(self, old_norm, in_length, z_length, out_length):
+    def __init__(self, old_norm, strides):
         super().__init__()
 
-        self.normalized_shape = old_norm.normalized_shape
+        self.normalized_shape = old_norm.weight.shape
         self.num_d = len(self.normalized_shape)
+
+        self.num_strides = len(strides)
+        self.strides = strides
 
         self.norm = nn.RMSNorm(
             normalized_shape=self.normalized_shape,
-            eps=old_norm.eps,
+            eps=old_norm.variance_epsilon,
             elementwise_affine=False
-        ).to(old_norm.weight.device)
+        )
 
-        self.in_length = in_length
-        self.z_length = z_length
-        self.out_length = out_length
-
-        self.in_scale = nn.Parameter(old_norm.weight.data.clone().detach())
-        self.z_scale = nn.Parameter(old_norm.weight.data.clone().detach())
-        self.out_scale = nn.Parameter(old_norm.weight.data.clone().detach())
+        self.scales = nn.ParameterList(
+            [
+                old_norm.weight.data.clone().detach() for _ in range(self.num_strides)
+            ]
+        )
     
+
+    def _get_scales(self):
+
+        out = []
+        for i in range(self.num_strides):
+            scale = self.scales[i]
+            stride = self.strides[i]
+
+            expanded_scale = scale[None].expand(stride, *([-1] * self.num_d))
+            out.append(expanded_scale)
+        
+        return torch.cat(out, dim=0)
+
 
     def forward(self, x):
+
         x = self.norm(x)
 
-        scale = torch.cat(
-            [
-                self.in_scale[None].expand(self.in_length, *([-1]* self.num_d)),
-                self.z_scale[None].expand(self.z_length, *([-1]* self.num_d)),
-                self.out_scale[None].expand(self.out_length, *([-1]* self.num_d))
-            ],
-            dim=0
-        )
-        while scale.dim() < x.dim():
-            scale = scale[None]
+        scales = self._get_scales()
+        scales = unsqueeze_to_batch(scales, x)
 
-        return x * scale
+        return x * scales
 
 
-class ZLM(PreTrainedModel):
-    """
-    ZLM (Zero-shot Latent Model) implementation.
-    """
-    config_class = ZLMConfig
+class ZLmModel(PreTrainedModel):
+
+    config_class = ZLmConfig
     
-    def __init__(self, config: ZLMConfig):
+    
+    def __init__(self, config: ZLmConfig):
         super().__init__(config)
 
-        self.in_length = config.in_length
+        # save config
+        self.input_length = config.input_length
+        self.output_length = config.output_length
+
         self.z_length = config.z_length
-        self.out_length = config.out_length
+        self.num_z = self.z_length - 1
 
-        self.hidden_size = config.hidden_size
-        self.z_size = config.z_size
+        self.latent_size = config.latent_size
 
+        # get base model
         base_model = LlamaForCausalLM.from_pretrained(
-            config["base_url"]
-        )
+            config.base_url,
+            torch_dtype=torch.float16,
+        ).to(torch.float32)
 
-        self.embed_tokens = base_model.model.embed_tokens        
+        self.hidden_size = base_model.config.hidden_size
+
+        # copy token embeddings (clone to untie)
+        self.embed_tokens = base_model.model.embed_tokens
+        self.embed_tokens.weight = nn.Parameter(self.embed_tokens.weight.data.clone().detach())
+
         self.lm_head = base_model.lm_head
+        self.lm_head.weight = nn.Parameter(self.lm_head.weight.data.clone().detach())
 
-        self.encoder_sep = nn.Parameter(
-            self.embed_tokens.weight.data[config.sep_token_id].clone().detach()
+        # calculate embedding stats
+        embed_std = self.embed_tokens.weight.data.std(0).detach()
+        embed_mean = self.embed_tokens.weight.data.mean(0).detach()
+
+        # create encoder special tokens
+        self.encoder_sep_token = nn.Parameter(
+            (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
         )
         self.encoder_z_tokens = nn.Parameter(
-            self.embed_tokens.weight.data.mean(0, keepdim=True).detach() +
-            (
-                torch.randn(self.z_length, self.hidden_size)
-                * self.embed_tokens.weight.data.std(0, keepdim=True).detach()
-            )
+            torch.randn(self.num_z, self.hidden_size) * embed_std[None] + embed_mean[None]
         )
 
-        self.decoder_intermed_tokens = nn.Parameter(
-            self.embed_tokens.weight.data.mean(0, keepdim=True).detach() +
-            (
-                torch.randn(self.z_length, self.hidden_size)
-                * self.embed_tokens.weight.data.std(0, keepdim=True).detach()
-            )
+        # create decoder special tokens
+        self.decoder_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std[None] + embed_mean[None]
+        )
+        self.decoder_start_output_token = nn.Parameter(
+            (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
         )
 
+        # create the encoder and decoder
         self.encoder = LlamaModel(base_model.model.config)
         self.decoder = LlamaModel(base_model.model.config)
 
-        for transformer in [self.encoder, self.decoder]:
-            transformer.load_state_dict({k: v.clone() for k, v in base_model.model.state_dict()})
+        # copy the encoder and decoder params from the base model
+        transformers_with_strides = [
+            (self.encoder, [self.input_length, self.output_length + 1, self.num_z]),
+            (self.decoder, [self.input_length, self.z_length, self.output_length]),
+        ]
+        for transformer, strides in transformers_with_strides:
+            transformer.load_state_dict({k: v.clone().detach() for k, v in base_model.model.state_dict().items()})
 
+            # replace the layernorms with modulating RMSNorms
             for layer in transformer.layers:
                 layer.input_layernorm = ModulatingRMSNorm(
                     layer.input_layernorm,
-                    self.in_length,
-                    self.z_length,
-                    self.out_length
+                    strides
                 )
                 layer.post_attention_layernorm = ModulatingRMSNorm(
                     layer.post_attention_layernorm,
-                    self.in_length,
-                    self.z_length,
-                    self.out_length
+                    strides
                 )
 
-        self.encoder_norm = nn.RMSNorm(
-            self.hidden_size,
-            eps=config.rms_norm_eps
-        )
+        # reset the scales of the encoder norms to 1
         self.encoder.norm.weight.data = torch.ones_like(self.encoder.norm.weight.data)
 
+        # replace the output norms in the decoder to seperate z and lm outputs
         self.lm_norm = self.decoder.norm
-        self.decoder_norm = nn.RMSNorm(
+        self.z_norm = nn.RMSNorm(
             self.hidden_size,
             eps=config.rms_norm_eps
         )
+
         self.decoder.norm = nn.Identity()
+        
+        # create the encoder io linears
+        self.encoder_noise_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
+        self.encoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
 
-        self.encoder_z_proj_in = nn.Linear(self.z_size, self.hidden_size, bias=True)
-        self.decoder_z_proj_in = nn.Linear(self.z_size, self.hidden_size, bias=True)
+        self.encoder_noise_proj_in.weight.data *= embed_std[..., None]
 
-        self.encoder_z_proj_out = nn.Linear(self.hidden_size, self.z_size, bias=False)
-        self.decoder_z_proj_out = nn.Linear(self.hidden_size, self.z_size, bias=False)
+        # create the decoder io linears
+        self.decoder_z_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
+        self.decoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
+
+        self.decoder_z_proj_in.weight.data *= embed_std[..., None]
 
         # Initialize weights and gradient checkpointing
         self.post_init()
     
 
+    # overwrite to prevent overwriting the base model weights
     def init_weights(self):
         return
 
@@ -159,39 +199,75 @@ class ZLM(PreTrainedModel):
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
     ):
-        assert input_ids.shape[-1] == self.in_length, "Input length mismatch."
-        assert output_ids.shape[-1] == self.out_length, "Output length mismatch."
-        assert input_ids.shape[:-1] == output_ids.shape[:-1], "Batch size mismatch."
+        
+        # get the input and output tokens
+        input_tokens = self.embed_tokens(input_ids)
+        output_tokens = self.embed_tokens(output_ids)
 
-        batch_shape = input_ids.shape[:-1]
-        batch_dims = len(batch_shape)
-
+        # generate the noise
         noise = torch.randn(
-            *batch_shape, self.z_length-1, self.z_size
-        ).to(input_ids.device)
+            *input_ids.shape[:-1],
+            self.num_z,
+            self.latent_size,
+        ).to(input_tokens)
 
-        encoder_states = torch.cat(
+        # get the encoder input
+        encoder_hidden_states = torch.cat(
             [
-                self.embed_tokens(input_ids),
-                self.encoder_sep.view(*([1] * batch_dims), -1),
-                self.embed_tokens(output_ids),
-                self.encoder_z_tokens.view(*([1] * batch_dims), self.encoder_z_tokens.shape[0], -1),
-            ]
+                input_tokens,
+                expand_to_batch(self.encoder_sep_token, input_tokens),
+                output_tokens,
+                expand_to_batch(self.encoder_z_tokens[:1], input_tokens),
+                expand_to_batch(self.encoder_z_tokens[1:], input_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
+            ],
+            dim=-2
         )
-        encoder_states[..., -(self.z_length-1):] = (
-            encoder_states[..., -(self.z_length-1):].clone() +
-            self.encoder_z_proj_in(noise)
-        )
-        encoder_states = self.encoder(encoder_states)[0]
 
-        z = self.encoder_z_proj_out(encoder_states[..., -(self.z_length-1):])
-        
-        outputs = {}
-        
-        # Placeholder logic - to be implemented
-        if input_ids is not None:
-            batch_size = input_ids.shape[0]
-            latent = self.encoder(torch.randn(batch_size, self.config.hidden_size).to(input_ids.device))
-            outputs["latent"] = latent
-        
-        return outputs
+        # pass through the encoder
+        encoder_hidden_states = self.encoder(
+            inputs_embeds=encoder_hidden_states,
+        ).last_hidden_state
+
+        # get the latent distribution from the encoder output
+        encoder_mus = self.encoder_mu_proj_out(
+            encoder_hidden_states[..., -self.num_z:, :]
+        )
+        z = noise + encoder_mus
+
+        # get the decoder input
+        decoder_hidden_states = torch.cat(
+            [
+                input_tokens,
+                expand_to_batch(self.decoder_z_tokens[:1], input_tokens),
+                expand_to_batch(self.decoder_z_tokens[1:], input_tokens) + self.decoder_z_proj_in(z),
+                expand_to_batch(self.decoder_start_output_token, input_tokens),
+                output_tokens[..., :-1, :],
+            ],
+            dim=-2
+        )
+
+        # pass through the decoder
+        decoder_hidden_states = self.decoder(
+            inputs_embeds=decoder_hidden_states,
+        ).last_hidden_state
+
+        # get the decoder latent distribution
+        decoder_mus = self.decoder_mu_proj_out(
+            self.z_norm(
+                decoder_hidden_states[..., self.input_length:(self.input_length + self.num_z), :]
+            )
+        )
+
+        # get the decoder lm output
+        self.decoder_lm_logits = self.lm_head(
+            self.lm_norm(
+                decoder_hidden_states[..., -self.output_length:, :]
+            )
+        )
+
+        return DotDict(
+            encoder_mus=encoder_mus,
+            decoder_mus=decoder_mus,
+            decoder_lm_logits=self.decoder_lm_logits,
+        )
+    
