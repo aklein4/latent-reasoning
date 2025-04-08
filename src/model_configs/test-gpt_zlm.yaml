@@ -1,0 +1,14 @@
+
+model_type: gpt_zlm
+architectures: [
+    GPTZLmModel
+]
+
+base_url: openai-community/gpt2
+
+in_length: 5
+out_length: 7
+
+z_length: 11
+
+latent_size: 53
