@@ -1,25 +1,29 @@
 trainer_type: zlm
 
-ds_type: split
-ds_kwargs: {}
+dataset: fineweb-100BT-split-128
+collator_type: split
+collator_kwargs: {}
 
-bs: 4
-num_epochs: 10000
+bs: 128
+num_epochs: 1
 
 optimizer_type: adamw
 optimizer_kwargs:
 
-    num_warmup_steps: 10
-    num_training_steps: 5000
+    num_warmup_steps: 100
+    num_training_steps: 1000000
 
-    lr: 0.0001
-    final_lr: 0.000001
+    lr: 0.00003
+    final_lr: 0.000003
 
     betas: [0.9, 0.95]
     eps: 0.00000001
     weight_decay: 0.01
 
-checkpoint_interval: 1000
+checkpoint_interval: 5000
 save_optimizer: false
+
+info_threshold: 0.5
+info_total: 1000
 
 kl_weight: 0.1

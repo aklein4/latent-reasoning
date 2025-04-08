@@ -2,7 +2,7 @@
 import numpy as np
 import os
 import webdataset as wds
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 import huggingface_hub as hf
 
@@ -152,7 +152,7 @@ def create_split(
 
                 pbar.update(2*piece_length)
                 pbar.set_postfix(
-                    total=f"{2*piece_length:_}",
+                    total=f"{2*piece_length*curr_ind:_}",
                     ind=f"{curr_ind:_}",
                     total_tested=f"{total_tested:_}",
                     total_pass=f"{total_pass:_}",

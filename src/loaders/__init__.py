@@ -31,7 +31,7 @@ def get_loader(
         streaming=streaming
     )
 
-    collator = COLLATOR_DICT[collator_type](**collator_kwargs["collator_kwargs"])
+    collator = COLLATOR_DICT[collator_type](**collator_kwargs)
 
     return DataLoader(
         dataset=dataset,

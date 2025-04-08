@@ -1,6 +1,8 @@
 
 import argparse
 
+import torch
+
 from loaders import get_loader
 from models import CONFIG_DICT, MODEL_DICT
 from trainers import TRAINER_DICT
@@ -21,12 +23,15 @@ def main(args):
     model = MODEL_DICT[model_type](model_config_obj).to(constants.DEVICE)
 
     model.gradient_checkpointing_enable()
-
+    
     print("Loading data...")
     loader = get_loader(
-        train_config["ds_type"],
-        train_config["ds_kwargs"],
+        train_config["dataset"],
+        "train",
         train_config["bs"],
+        train_config["collator_type"],
+        train_config["collator_kwargs"],
+        streaming=True
     )
 
     print("Loading trainer...")

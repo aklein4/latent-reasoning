@@ -9,6 +9,7 @@ from transformers import (
 
 from utils.dot_dict import DotDict
 from utils.model_utils import unsqueeze_to_batch, expand_to_batch
+import utils.constants as constants
 
 
 class ZLmConfig(PretrainedConfig):
@@ -18,7 +19,7 @@ class ZLmConfig(PretrainedConfig):
     """
 
     model_type = "zlm"
-    
+    supports_gradient_checkpointing = True
 
     def __init__(
         self,
@@ -27,6 +28,7 @@ class ZLmConfig(PretrainedConfig):
         output_length: int = 128,
         z_length: int = 512,
         latent_size: int = 128,
+        z_init_scale: float = 0.1,
         *args,
         **kwargs
     ):
@@ -39,6 +41,8 @@ class ZLmConfig(PretrainedConfig):
         self.z_length = z_length
         self.latent_size = latent_size
         
+        self.z_init_scale = z_init_scale
+
         super().__init__(*args, **kwargs)
 
 
@@ -92,6 +96,8 @@ class ModulatingRMSNorm(nn.Module):
 class ZLmModel(PreTrainedModel):
 
     config_class = ZLmConfig
+    supports_gradient_checkpointing = True
+    _supports_flash_attn_2 = True
     
     
     def __init__(self, config: ZLmConfig):
@@ -111,6 +117,10 @@ class ZLmModel(PreTrainedModel):
             config.base_url,
             torch_dtype=torch.float16,
         ).to(torch.float32)
+
+        # enable flash attention
+        if str(constants.DEVICE) == "cuda":
+            base_model.config._attn_implementation = "flash_attention_2"
 
         self.hidden_size = base_model.config.hidden_size
 
@@ -171,7 +181,7 @@ class ZLmModel(PreTrainedModel):
         self.lm_norm = self.decoder.norm
         self.z_norm = nn.RMSNorm(
             self.hidden_size,
-            eps=config.rms_norm_eps
+            eps=base_model.config.rms_norm_eps
         )
 
         self.decoder.norm = nn.Identity()
@@ -181,12 +191,14 @@ class ZLmModel(PreTrainedModel):
         self.encoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
 
         self.encoder_noise_proj_in.weight.data *= embed_std[..., None]
+        self.encoder_mu_proj_out.weight.data *= self.config.z_init_scale
 
         # create the decoder io linears
         self.decoder_z_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
         self.decoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
 
         self.decoder_z_proj_in.weight.data *= embed_std[..., None]
+        self.decoder_mu_proj_out.weight.data *= self.config.z_init_scale
 
         # Initialize weights and gradient checkpointing
         self.post_init()
@@ -267,7 +279,7 @@ class ZLmModel(PreTrainedModel):
                 decoder_hidden_states[..., -self.output_length:, :]
             )
         )
-        F.log_softmax(decoder_lm_logits, dim=-1)
+        decoder_lm_logits = F.log_softmax(decoder_lm_logits, dim=-1)
 
         return DotDict(
             encoder_mus=encoder_mus,

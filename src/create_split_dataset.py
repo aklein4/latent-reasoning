@@ -7,12 +7,12 @@ from data_prep.split_data import create_split, TokenizerMap
 import utils.constants as constants
 
 
-TOKENIZER_URL = "TinyLlama/TinyLlama_v1.1"
+TOKENIZER_URL = "openai-community/gpt2"
 
 DATA_URL = 'HuggingFaceFW/fineweb'
 DATA_SUBSET = "sample-100BT"
 
-SAVE_REPO = 'fineweb-100BT-split-128'
+SAVE_REPO = 'GPT2-fineweb-100BT-split-128'
 
 TRAIN_SIZE = None
 VAL_SIZE = 1e7
@@ -21,7 +21,7 @@ TEST_SIZE = 1e7
 BATCH_SIZE = 1024*8
 
 PIECE_LENGTH = 128
-
+[]
 
 def main():
     
@@ -30,12 +30,12 @@ def main():
         use_fast=True,
         resume_download=None
     )
-    tokenizer.add_special_tokens({"pad_token": "<pad>"})
-    tokenizer.save_pretrained(
-        save_directory=f"{SAVE_REPO}_tokenizer",
-        repo_id=f"{constants.HF_ID}/{SAVE_REPO}_tokenizer",
-        push_to_hub=True
-    )
+    # tokenizer.add_special_tokens({"pad_token": "<pad>"})
+    # tokenizer.save_pretrained(
+    #     save_directory=f"{SAVE_REPO}_tokenizer",
+    #     repo_id=f"{constants.HF_ID}/{SAVE_REPO}_tokenizer",
+    #     push_to_hub=True
+    # )
 
     dataset = datasets.load_dataset(
         DATA_URL,
