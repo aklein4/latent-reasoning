@@ -13,8 +13,8 @@ optimizer_kwargs:
     num_warmup_steps: 100
     num_training_steps: 1000000
 
-    lr: 0.00003
-    final_lr: 0.000003
+    lr: 0.00005
+    final_lr: 0.000005
 
     betas: [0.9, 0.95]
     eps: 0.00000001
@@ -23,7 +23,9 @@ optimizer_kwargs:
 checkpoint_interval: 5000
 save_optimizer: false
 
-info_threshold: 0.5
-info_total: 1000
+kl_weight: 0.10
 
-kl_weight: 0.1
+hook_acc: 0.75
+
+upper_p_bound: 0.80
+lower_p_bound: 0.70

@@ -7,43 +7,62 @@ from utils.dot_dict import DotDict
 
 
 class ZLmTrainer(BaseTrainer):
-
-    info_hits = 1
-
+    
+    hooked = False
+    
 
     def train_step(self, step, model, input_ids, output_ids):
 
+        # get model predictions
         output = model(input_ids, output_ids)
 
+        # extract probabilities
         logp = torch.take_along_dim(
             output.lm_logits,
             output_ids[..., None],
             dim=-1,
         )[..., 0]
 
+        p = logp.exp()
+
+        kl = ((output.encoder_mus - output.decoder_mus).pow(2) / 2).sum(-1)
+
+        # calculate lm metrics
         results = DotDict(
             lm_loss = -logp.mean(),
+            lm_pcorr = logp.exp().mean(),
+            lm_acc = (output.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
         
-        self.info_hits += (results.lm_loss <= self.info_threshold).long().detach().item()
-        results.info_weight = min(1.0, self.info_hits / self.info_total)        
+        # calculate kl metrics
+        results.kl_per_channel = kl.mean() / model.latent_size
+        results.kl_per_token = kl.mean() * model.num_z / model.output_length
+        results.elbo = results.lm_loss + results.kl_per_token
 
-        # [..., seq]
-        kl = ((output.encoder_mus - output.decoder_mus).pow(2) / 2).sum(-1)
-        results.kl_raw = kl.mean()
-        results.kl_raw_per_token = results.kl_raw * model.num_z / model.output_length
+        # calculate weighted lm loss
+        sinker = 1e-7 + 1 - torch.clip(
+            (p - self.lower_p_bound) / (self.upper_p_bound - self.lower_p_bound),
+            min=0.0,
+            max=1.0,
+        ).detach()
 
-        # [seq]
+        results.lm_loss_weighted = -(sinker * logp).mean()
+
+        # get weighted kl
         seq_kl = kl.reshape(-1, kl.shape[-1]).mean(0)
+        weighted_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7)).detach()
 
-        # [seq]
-        fixed_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7))
-        results.kl_loss = fixed_kl.sum() / model.output_length
+        results.kl_per_token_weighted = weighted_kl.sum() / model.output_length
 
-        results.loss = (
-            results.lm_loss +
-            results.info_weight * self.kl_weight * results.kl_loss
-        )
+        if not self.hooked:
+            if results.lm_acc >= self.hook_acc:
+                self.hooked = True
+                results.reset_optimizer = 1.0
+
+        loss = results.lm_loss_weighted
+        if self.hooked:
+            loss = loss + results.kl_per_token_weighted * self.kl_weight
+        results.loss = loss
 
         return results
     

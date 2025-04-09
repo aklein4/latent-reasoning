@@ -146,6 +146,13 @@ class BaseTrainer:
                 results.loss.backward()
 
                 # perform a single optimizer step
+                if "reset_optimizer" in results.keys():
+                    del optimizer
+                    optimizer = OPTIMIZER_DICT[self.optimizer_type](
+                        model.parameters(),
+                        **self.optimizer_kwargs
+                    )
+
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
