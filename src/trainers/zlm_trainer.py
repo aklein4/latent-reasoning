@@ -46,6 +46,7 @@ class ZLmTrainer(BaseTrainer):
             max=1.0,
         ).detach()
 
+        results.lm_mask = sinker.mean()
         results.lm_loss_weighted = -(sinker * logp).mean()
 
         # get weighted kl
