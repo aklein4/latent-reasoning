@@ -68,6 +68,8 @@ class ModulatingRMSNorm(nn.Module):
                 old_norm.weight.data.clone().detach() for _ in range(self.num_strides)
             ]
         )
+
+        self.index = None
     
 
     def _get_scales(self):
@@ -87,8 +89,12 @@ class ModulatingRMSNorm(nn.Module):
 
         x = self.norm(x)
 
-        scales = self._get_scales()
-        scales = unsqueeze_to_batch(scales, x)
+        if self.index is None:
+            scales = self._get_scales()
+            scales = unsqueeze_to_batch(scales, x)
+        else:
+            scales = self.scales[self.index]
+            scales = unsqueeze_to_batch(scales, x)
 
         return x * scales
 
@@ -100,7 +106,7 @@ class ZLmModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     
     
-    def __init__(self, config: ZLmConfig):
+    def __init__(self, config: ZLmConfig, cpu=False):
         super().__init__(config)
 
         # save config
@@ -116,11 +122,14 @@ class ZLmModel(PreTrainedModel):
         base_model = LlamaForCausalLM.from_pretrained(
             config.base_url,
             torch_dtype=torch.float16,
+            device_map="cpu",
         ).to(torch.float32)
 
         # enable flash attention
-        if str(constants.DEVICE) == "cuda":
+        if str(constants.DEVICE) == "cuda" and not cpu:
             base_model.config._attn_implementation = "flash_attention_2"
+        else:
+            base_model.config._attn_implementation = "eager"
 
         self.hidden_size = base_model.config.hidden_size
 
@@ -286,4 +295,83 @@ class ZLmModel(PreTrainedModel):
             decoder_mus=decoder_mus,
             lm_logits=decoder_lm_logits,
         )
+
+
+    def _set_norm_index(self, index):
+        for m in self.modules():
+            if isinstance(m, ModulatingRMSNorm):
+                m.index = index
+
+
+    @torch.no_grad()
+    def sample(
+        self,
+        input_ids: torch.LongTensor,
+        temperature: float = 1.0,
+    ):
+        from transformers.cache_utils import DynamicCache
+        from tqdm import tqdm
+
+        # get the input tokens
+        input_tokens = self.embed_tokens(input_ids)
+        z_tokens = expand_to_batch(self.decoder_z_tokens, input_tokens)
+
+        # generate the noise
+        noise = torch.randn(
+            *input_ids.shape[:-1],
+            self.z_length,
+            self.latent_size,
+        ).to(input_tokens) * temperature
+
+        # initialize the cache
+        cache = DynamicCache()
+
+        # pass the input tokens through the decoder
+        self._set_norm_index(0)
+        cache = self.decoder(
+            inputs_embeds=input_tokens,
+            use_cache=True,
+            past_key_values=cache,
+        ).past_key_values        
+
+        # pass the noise through the decoder
+        z_prev = torch.zeros_like(noise[..., :1, :])
+        self._set_norm_index(1)
+        for i in tqdm(range(self.z_length), desc="Sampling z tokens"):
+
+            outputs = self.decoder(
+                inputs_embeds=(z_tokens[..., i:i+1, :] + self.decoder_z_proj_in(z_prev)),
+                use_cache=True,
+                past_key_values=cache,
+            )
+
+            z_prev = noise[..., i:i+1, :] + self.decoder_mu_proj_out(
+                self.z_norm(outputs.last_hidden_state)
+            )
+            cache = outputs.past_key_values
+
+        # sample the output tokens
+        self._set_norm_index(2)
+
+        prev_token = expand_to_batch(self.decoder_start_output_token, input_tokens)
+        output_tokens = []
+        for i in tqdm(range(self.output_length), desc="Sampling output tokens"):
+
+            outputs = self.decoder(
+                inputs_embeds=prev_token,
+                use_cache=True,
+                past_key_values=cache,
+            )
+
+            logits = self.lm_head(self.lm_norm(outputs.last_hidden_state))
+            ind = logits.argmax(-1)
+
+            output_tokens.append(ind)
+
+            prev_token = self.embed_tokens(ind)
+            cache = outputs.past_key_values
+
+        output_tokens = torch.cat(output_tokens, dim=-1)
+
+        return output_tokens
     
