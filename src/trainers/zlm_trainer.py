@@ -24,8 +24,6 @@ class ZLmTrainer(BaseTrainer):
             dim=-1,
         )[..., 0]
 
-        p = logp.exp()
-
         kl = ((output.encoder_mus - output.decoder_mus).pow(2) / 2).sum(-1)
 
         # calculate lm metrics
@@ -41,8 +39,22 @@ class ZLmTrainer(BaseTrainer):
         results.elbo = results.lm_loss + results.kl_per_token
 
         # calculate weighted lm loss
+        clone_logits = output.lm_logits.clone().detach()
+        clone_logits.scatter_(
+            dim=-1, 
+            index=output_ids[..., None],
+            src=torch.full_like(output.lm_logits[..., :1], float('-inf'))
+        )
+        clone_logits = F.log_softmax(clone_logits, dim=-1)
+
+        # Get the highest remaining logit (the runner-up prediction)
+        other_max_ids = clone_logits.max(dim=-1)
+
+        # Calculate the difference
+        delta = (logp - other_max_ids).detach()
+
         sinker = 1e-7 + 1 - torch.clip(
-            (p - self.lower_p_bound) / (self.upper_p_bound - self.lower_p_bound),
+            (delta - self.lower_delta_bound) / (self.upper_delta_bound - self.lower_delta_bound),
             min=0.0,
             max=1.0,
         ).detach()

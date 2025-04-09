@@ -28,5 +28,5 @@ kl_warmup_steps: 1000
 
 hook_acc: 0.75
 
-upper_p_bound: 0.80
-lower_p_bound: 0.70
+upper_delta_bound: 0.182 # ln(1.2)
+lower_delta_bound: 0.262 # ln(1.3)
