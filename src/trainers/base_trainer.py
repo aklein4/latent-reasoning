@@ -147,6 +147,8 @@ class BaseTrainer:
 
                 # perform a single optimizer step
                 if "reset_optimizer" in results.keys():
+                    results.pop("reset_optimizer")
+
                     del optimizer
                     optimizer = OPTIMIZER_DICT[self.optimizer_type](
                         model.parameters(),
