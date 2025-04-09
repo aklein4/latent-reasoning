@@ -9,7 +9,8 @@ from utils.dot_dict import DotDict
 class ZLmTrainer(BaseTrainer):
     
     hooked = False
-    
+    warmup_step_progress = 0
+
 
     def train_step(self, step, model, input_ids, output_ids):
 
@@ -60,10 +61,18 @@ class ZLmTrainer(BaseTrainer):
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
-        loss = results.lm_loss_weighted
-        if self.hooked:
-            loss = loss + results.kl_per_token_weighted * self.kl_weight
-        results.loss = loss
+        else:
+            self.warmup_step_progress += 1
+
+        results.kl_weight = self.base_kl_weight * min(
+            self.warmup_step_progress / self.kl_warmup_steps,
+            1.0,
+        )
+
+        results.loss = (
+            results.lm_loss_weighted +
+            results.kl_weight * results.kl_per_token_weighted
+        )
 
         return results
     

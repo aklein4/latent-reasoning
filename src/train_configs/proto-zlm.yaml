@@ -23,7 +23,8 @@ optimizer_kwargs:
 checkpoint_interval: 5000
 save_optimizer: false
 
-kl_weight: 0.10
+base_kl_weight: 0.10
+kl_warmup_steps: 1000
 
 hook_acc: 0.75
 
