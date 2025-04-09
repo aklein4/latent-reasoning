@@ -71,7 +71,7 @@ class ZLmTrainer(BaseTrainer):
 
         results.loss = (
             results.lm_loss_weighted +
-            results.kl_weight * results.kl_per_token_weighted
+            (results.kl_weight * results.kl_per_token_weighted if self.hooked else 0.0)
         )
 
         return results
