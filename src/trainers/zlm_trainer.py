@@ -45,7 +45,6 @@ class ZLmTrainer(BaseTrainer):
             index=output_ids[..., None],
             src=torch.full_like(output.lm_logits[..., :1], float('-inf'))
         )
-        clone_logits = F.log_softmax(clone_logits, dim=-1)
 
         # Get the highest remaining logit (the runner-up prediction)
         other_max_ids = clone_logits.max(dim=-1)
