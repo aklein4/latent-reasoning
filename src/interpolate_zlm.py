@@ -9,8 +9,6 @@ from models.zlm import ZLmConfig, ZLmModel
 from utils.config_utils import load_config
 import utils.constants as constants
 
-import matplotlib.pyplot as plt
-
 
 MODEL_CONFIG = 'proto-zlm'
 CHECKPOINT = 'proto-zlm_beta/000000014000/checkpoint.ckpt'
@@ -62,32 +60,34 @@ def main():
     tokens = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
     assert tokens.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
 
-    prompt_2 = """The European hedgehog (Erinaceus europaeus), also known as the West European hedgehog or common hedgehog, is a hedgehog species native to Europe from Iberia and Italy northwards into Scandinavia and westwards into the British Isles.[3] It is a generally common and widely distributed species that can survive across a wide range of habitat types. It is a well-known species, and a favourite in European gardens, both for its endearing appearance and its preference for eating a range of garden pests. While populations are currently stable across much of its range, it is declining severely in Great Britain[2] where it is now Red Listed,[4] meaning that it is considered to be at risk of local extinction. Outside its native range, the species was introduced to New Zealand during the late nineteenth and early twentieth centuries."""
-    tokens_2 = tokenizer(prompt_2, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
-    assert tokens_2.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
+    noise_1 = model.sample_noise(tokens)
+    noise_2 = model.sample_noise(tokens)
 
-    tokens = torch.cat([tokens, tokens_2], dim=0)
-    noise = model.sample_noise(tokens)
+    with open("interpolation.txt", "w") as f:
 
-    output = model.sample(
-        tokens,
-        temperature=1.0,
-        # guidance_scale=3.0,
-        # dropout_level=0.05
-        noise=noise,
-    ).mus
+        head = f"\n ===== INPUT ===== \n{tokenizer.decode(tokens[0])}\n"
+        print(head)
+        f.write(head)
 
-    dists = (output[0][None]- output[1][:, None]).pow(2).mean(-1)
+        noises = []
+        for t in np.linspace(0.0, 0.1, 11):
+            noises.append(slerp(t, noise_1, noise_2))
+        noise = torch.cat(noises, dim=0)
 
-    plt.matshow(dists.detach().cpu().numpy())
-    plt.colorbar()
+        output = model.sample(
+            tokens.expand(11, -1),
+            temperature=1.0,
+            # guidance_scale=3.0,
+            # dropout_level=0.05
+            noise=noise,
+        )
 
-    plt.title("Distance between two samples")
-    plt.xlabel("Token index")
-    plt.ylabel("Token index")
+        for i, t in enumerate(np.linspace(0.0, 0.1, 11)):
+            y = tokenizer.decode(output[i])
 
-    plt.tight_layout()
-    plt.savefig("distances.png")
+            message = f"\n ===== t={t:.2f} ===== \n{y}\n"
+            print(message)
+            f.write(message)
 
 
 if __name__ == '__main__':

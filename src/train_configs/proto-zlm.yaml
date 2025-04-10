@@ -23,10 +23,10 @@ optimizer_kwargs:
 checkpoint_interval: 2000
 save_optimizer: false
 
-base_kl_weight: 0.10
-kl_warmup_steps: 1000
+encoder_grad_scale: 0.10
 
 hook_acc: 0.75
+kl_warmup_steps: 1000
 
 upper_p_bound: 0.60
 lower_p_bound: 0.50

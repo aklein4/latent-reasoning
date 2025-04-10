@@ -70,6 +70,7 @@ class ModulatingRMSNorm(nn.Module):
         )
 
         self.index = None
+        self.dropout = None
     
 
     def _get_scales(self):
@@ -95,6 +96,9 @@ class ModulatingRMSNorm(nn.Module):
         else:
             scales = self.scales[self.index]
             scales = unsqueeze_to_batch(scales, x)
+
+        if self.dropout is not None:
+            x = F.dropout(x, p=self.dropout)
 
         return x * scales
 
@@ -149,12 +153,12 @@ class ZLmModel(PreTrainedModel):
             (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
         )
         self.encoder_z_tokens = nn.Parameter(
-            torch.randn(self.hidden_size)[None].repeat(self.num_z, 1) * embed_std[None] + embed_mean[None]
+            torch.randn(self.hidden_size, self.num_z) * embed_std[None] + embed_mean[None]
         )
 
         # create decoder special tokens
         self.decoder_z_tokens = nn.Parameter(
-            torch.randn(self.hidden_size)[None].repeat(self.z_length, 1) * embed_std[None] + embed_mean[None]
+            torch.randn(self.hidden_size, self.z_length)[None] * embed_std[None] + embed_mean[None]
         )
         self.decoder_start_output_token = nn.Parameter(
             (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
@@ -302,12 +306,119 @@ class ZLmModel(PreTrainedModel):
             if isinstance(m, ModulatingRMSNorm):
                 m.index = index
 
+    def _set_norm_dropout(self, dropout):
+        for m in self.modules():
+            if isinstance(m, ModulatingRMSNorm):
+                m.dropout = dropout
+
+
+    def sample_noise(
+        self, 
+        input_ids: torch.LongTensor
+    ):
+
+        input_tokens = self.embed_tokens(input_ids)
+        
+        # generate the noise
+        return torch.randn(
+            *input_ids.shape[:-1],
+            self.z_length,
+            self.latent_size,
+        ).to(input_tokens)
+
 
     @torch.no_grad()
     def sample(
         self,
         input_ids: torch.LongTensor,
         temperature: float = 1.0,
+        noise=None
+    ):
+        from transformers.cache_utils import DynamicCache
+        from tqdm import tqdm
+
+        # get the input tokens
+        input_tokens = self.embed_tokens(input_ids)
+        z_tokens = expand_to_batch(self.decoder_z_tokens, input_tokens)
+
+        # generate the noise
+        if noise is None:
+            noise = torch.randn(
+                *input_ids.shape[:-1],
+                self.z_length,
+                self.latent_size,
+            ).to(input_tokens) * temperature
+
+        # initialize the cache
+        cache = DynamicCache()
+
+        # pass the input tokens through the decoder
+        self._set_norm_index(0)
+        cache = self.decoder(
+            inputs_embeds=input_tokens,
+            use_cache=True,
+            past_key_values=cache,
+        ).past_key_values        
+
+        # pass the noise through the decoder
+        mus = []
+        z_prev = torch.zeros_like(noise[..., :1, :])
+        self._set_norm_index(1)
+        for i in tqdm(range(self.z_length), desc="Sampling z tokens"):
+
+            outputs = self.decoder(
+                inputs_embeds=(z_tokens[..., i:i+1, :] + self.decoder_z_proj_in(z_prev)),
+                use_cache=True,
+                past_key_values=cache,
+            )
+
+            mu = self.decoder_mu_proj_out(
+                self.z_norm(outputs.last_hidden_state)
+            )
+
+            mus.append(mu)
+
+            z_prev = noise[..., i:i+1, :] + mu
+            cache = outputs.past_key_values
+
+        mus = torch.cat(mus[:-1], dim=-2)
+
+        # sample the output tokens
+        self._set_norm_index(2)
+
+        prev_token = expand_to_batch(self.decoder_start_output_token, input_tokens)
+        output_tokens = []
+        for i in tqdm(range(self.output_length), desc="Sampling output tokens"):
+
+            outputs = self.decoder(
+                inputs_embeds=prev_token,
+                use_cache=True,
+                past_key_values=cache,
+            )
+
+            logits = self.lm_head(self.lm_norm(outputs.last_hidden_state))
+            ind = logits.argmax(-1)
+
+            output_tokens.append(ind)
+
+            prev_token = self.embed_tokens(ind)
+            cache = outputs.past_key_values
+
+        output_tokens = torch.cat(output_tokens, dim=-1)
+
+        return DotDict(
+            tokens=output_tokens,
+            mus=mus,
+        )
+
+
+    @torch.no_grad()
+    def guided_sample(
+        self,
+        input_ids: torch.LongTensor,
+        temperature: float = 1.0,
+        guidance_scale: float = 2.0,
+        dropout_level: float = 0.1,
     ):
         from transformers.cache_utils import DynamicCache
         from tqdm import tqdm
@@ -325,6 +436,7 @@ class ZLmModel(PreTrainedModel):
 
         # initialize the cache
         cache = DynamicCache()
+        bad_cache = DynamicCache()
 
         # pass the input tokens through the decoder
         self._set_norm_index(0)
@@ -333,6 +445,14 @@ class ZLmModel(PreTrainedModel):
             use_cache=True,
             past_key_values=cache,
         ).past_key_values        
+
+        self._set_norm_dropout(dropout_level)
+        bad_cache = self.decoder(
+            inputs_embeds=input_tokens,
+            use_cache=True,
+            past_key_values=bad_cache,
+        ).past_key_values
+        self._set_norm_dropout(None)
 
         # pass the noise through the decoder
         z_prev = torch.zeros_like(noise[..., :1, :])
@@ -345,10 +465,26 @@ class ZLmModel(PreTrainedModel):
                 past_key_values=cache,
             )
 
-            z_prev = noise[..., i:i+1, :] + self.decoder_mu_proj_out(
+            self._set_norm_dropout(dropout_level)
+            bad_outputs = self.decoder(
+                inputs_embeds=(z_tokens[..., i:i+1, :] + self.decoder_z_proj_in(z_prev)),
+                use_cache=True,
+                past_key_values=bad_cache,
+            )
+            self._set_norm_dropout(None)
+
+            mu_good = self.decoder_mu_proj_out(
                 self.z_norm(outputs.last_hidden_state)
             )
+            mu_bad = self.decoder_mu_proj_out(
+                self.z_norm(bad_outputs.last_hidden_state)
+            )
+            mu_guided = mu_bad + guidance_scale * (mu_good - mu_bad)
+
+            z_prev = noise[..., i:i+1, :] + mu_guided
+
             cache = outputs.past_key_values
+            bad_cache = bad_outputs.past_key_values
 
         # sample the output tokens
         self._set_norm_index(2)
