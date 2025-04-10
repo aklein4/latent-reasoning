@@ -24,7 +24,7 @@ class UncondZLmTrainer(BaseTrainer):
             dim=-1,
         )[..., 0]
 
-        kl = (output.encoder_mus - output.decoder_mus).pow(2).sum(-1) / 2
+        kl = (output.encoder_mus - output.generator_mus).pow(2).sum(-1) / 2
 
         mean_mus = output.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
