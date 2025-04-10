@@ -4,7 +4,7 @@ dataset: fineweb-100BT-split-128
 collator_type: split
 collator_kwargs: {}
 
-bs: 128
+bs: 64
 num_epochs: 1
 
 optimizer_type: adamw
