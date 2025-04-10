@@ -153,12 +153,12 @@ class ZLmModel(PreTrainedModel):
             (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
         )
         self.encoder_z_tokens = nn.Parameter(
-            torch.randn(self.hidden_size, self.num_z) * embed_std[None] + embed_mean[None]
+            torch.randn(self.num_z, self.hidden_size) * embed_std[None] + embed_mean[None]
         )
 
         # create decoder special tokens
         self.decoder_z_tokens = nn.Parameter(
-            torch.randn(self.hidden_size, self.z_length)[None] * embed_std[None] + embed_mean[None]
+            torch.randn(self.z_length, self.hidden_size)[None] * embed_std[None] + embed_mean[None]
         )
         self.decoder_start_output_token = nn.Parameter(
             (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
