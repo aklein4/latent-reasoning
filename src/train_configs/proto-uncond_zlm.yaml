@@ -25,5 +25,5 @@ save_optimizer: false
 
 kl_weight: 0.01
 
-upper_p_bound: 0.70
-lower_p_bound: 0.80
+upper_p_bound: 0.80
+lower_p_bound: 0.70

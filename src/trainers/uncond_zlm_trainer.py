@@ -57,15 +57,15 @@ class UncondZLmTrainer(BaseTrainer):
         # get weighted kl
         seq_kl = kl.reshape(-1, kl.shape[-2] * kl.shape[-1]).mean(0)
 
-        table = wandb.Table(
-            data=seq_kl.detach().cpu().numpy()[None],
-            columns=["KL"]
-        )
-        results.sequence_kl = wandb.plot.histogram(
-            table,
-            "position",
-            title="Sequence KL",
-        )
+        # table = wandb.Table(
+        #     data=seq_kl.detach().cpu().numpy()[:, None],
+        #     columns=["KL"]
+        # )
+        # results.sequence_kl = wandb.plot.histogram(
+        #     table,
+        #     "position",
+        #     title="Sequence KL",
+        # )
 
         weighted_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7)).detach()
         results.kl_per_token_weighted = weighted_kl.sum() / model.output_length

@@ -12,23 +12,46 @@ def main():
 
     print("loading model...")
     config = load_config(MODEL_CONFIG, "model")
-    model = UncondZLmModel(UncondZLmConfig(**config), cpu=True)
+    model = UncondZLmModel(UncondZLmConfig(**config)).to(constants.DEVICE)
+    model.train()
+    for param in model.parameters():
+        param.requires_grad = True
     print("Model loaded!")
 
     input_ids = torch.randint(
         0, 100,
         size=(3, model.input_length),
         dtype=torch.long
-    )
+    ).to(constants.DEVICE)
     output_ids = torch.randint(
         0, 100,
         size=(3, model.output_length),
         dtype=torch.long
-    )
+    ).to(constants.DEVICE)
 
     print("Running model...")
-    out = model(input_ids, output_ids)
-    print("Model run complete!")
+    with torch.autocast(
+        device_type="cuda",
+        dtype=torch.bfloat16,
+    ):
+        out = model(input_ids, output_ids)
+        print("Model run complete!")
+
+        loss = out.lm_logits.sum() + (out.encoder_mus - out.generator_mus).pow(2).sum(-1).mean()
+    loss.backward()
+    print("Loss computed!")
+
+    with open("gradients.txt", "w") as f:
+
+        f.write("\n === GRADIENTS === \n\n")
+        for n, p in model.named_parameters():
+            if p.grad is not None:
+                f.write(f"{n}\n")
+
+        f.write("\n === NO GRADIENT === \n\n")
+        for n, p in model.named_parameters():
+            if p.grad is None:
+                f.write(f"{n}\n")
 
     print("Output shapes:")
     for k, v in out.items():
