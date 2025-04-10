@@ -1,0 +1,29 @@
+trainer_type: uncond_zlm
+
+dataset: fineweb-100BT-split-128
+collator_type: split
+collator_kwargs: {}
+
+bs: 128
+num_epochs: 1
+
+optimizer_type: adamw
+optimizer_kwargs:
+
+    num_warmup_steps: 100
+    num_training_steps: 20000
+
+    lr: 0.00005
+    final_lr: 0.000005
+
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.01
+
+checkpoint_interval: 2000
+save_optimizer: false
+
+kl_weight: 0.01
+
+upper_p_bound: 0.70
+lower_p_bound: 0.80
