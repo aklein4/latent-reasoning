@@ -23,10 +23,9 @@ optimizer_kwargs:
 checkpoint_interval: 2500
 save_optimizer: false
 
-kl_scale: 0.02
+kl_scale: 0.01
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
 
-upper_kl_bound: 1.00
-lower_kl_bound: 0.50
+acc_hook: 0.5
