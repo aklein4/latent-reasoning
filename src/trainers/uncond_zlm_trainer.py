@@ -43,15 +43,16 @@ class UncondZLmTrainer(BaseTrainer):
 
         # calculate kl metrics
         kl = (
-            output.encoder_mus - output.generator_mus
-        ).pow(2).sum(-1) / 2
+            (output.encoder_mus if self.hooked else output.encoder_mus.detach()) - 
+            output.generator_mus
+        ).pow(2).sum(-2) / 2
         if not self.hooked:
             kl = kl.detach()
 
         mean_mus = output.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
             output.encoder_mus - mean_mus
-        ).pow(2).sum(-1).detach() / 2
+        ).pow(2).sum(-2).detach() / 2
 
         results.kl_per_channel = kl.mean() / model.latent_size_per_layer
         results.kl_per_token = kl.mean() * (model.z_length * model.num_latent_layers) / model.output_length
