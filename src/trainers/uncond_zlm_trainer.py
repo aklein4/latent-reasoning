@@ -53,6 +53,16 @@ class UncondZLmTrainer(BaseTrainer):
         results.lm_loss_scaled = -(logp * results.lm_scale).mean()
 
         # get weighted kl
+        results.kl_scale = 1e-7 + torch.clip(
+            (results.kl_per_token - self.lower_kl_bound) / (self.upper_kl_bound - self.lower_kl_bound),
+            min=0.0,
+            max=1.0,
+        ).detach().item()
+
+        kl = (
+            scale_gradient(output.encoder_mus, results.kl_scale) - output.generator_mus
+        ).pow(2).sum(-1) / 2
+
         seq_kl = kl.reshape(-1, kl.shape[-2] * kl.shape[-1]).mean(0)
         weighted_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7)).detach()
         results.kl_per_token_weighted = weighted_kl.sum() / model.output_length

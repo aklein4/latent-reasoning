@@ -27,3 +27,6 @@ kl_scale: 0.02
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
+
+upper_kl_bound: 1.00
+lower_kl_bound: 0.50
