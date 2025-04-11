@@ -145,6 +145,19 @@ class BaseTrainer:
 
                 results.loss.backward()
 
+                if curr_step == 0:
+                    with open("gradients.txt", "w") as f:
+
+                        f.write("\n === GRADIENTS === \n\n")
+                        for n, p in model.named_parameters():
+                            if p.grad is not None:
+                                f.write(f"{n}\n")
+
+                        f.write("\n === NO GRADIENT === \n\n")
+                        for n, p in model.named_parameters():
+                            if p.grad is None:
+                                f.write(f"{n}\n")
+
                 # perform a single optimizer step
                 if "reset_optimizer" in results.keys():
                     results.pop("reset_optimizer")

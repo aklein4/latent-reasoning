@@ -14,5 +14,5 @@ z_length: 512
 latent_size_per_layer: 16
 num_latent_layers: 8
 
-mu_init_scale: 0.3
-small_init_scale: 1.0
+mu_init_scale: 1.0
+small_init_scale: 0.01

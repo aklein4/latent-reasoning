@@ -39,12 +39,14 @@ class UncondZLmTrainer(BaseTrainer):
             if results.lm_acc.item() >= self.acc_hook:
                 self.hooked = True
                 results.reset_optimizer = 1.0
+        results.hooked = 1.0 if self.hooked else 0.0
 
         # calculate kl metrics
         kl = (
-            (output.encoder_mus if self.hooked else output.encoder_mus.detach()) -
-            output.generator_mus
+            output.encoder_mus - output.generator_mus
         ).pow(2).sum(-1) / 2
+        if not self.hooked:
+            kl = kl.detach()
 
         mean_mus = output.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
