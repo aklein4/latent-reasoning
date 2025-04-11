@@ -46,7 +46,7 @@ class UncondZLmTrainer(BaseTrainer):
 
         # calculate weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
-            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_p_bound),
+            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
             min=0.0,
             max=1.0,
         ).detach()
