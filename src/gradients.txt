@@ -112,6 +112,9 @@ encoder.layers.6.base_layer.post_attention_layernorm.scales.0
 encoder.layers.6.base_layer.post_attention_layernorm.scales.1
 encoder.layers.6.base_layer.post_attention_layernorm.biases.0
 encoder.layers.6.base_layer.post_attention_layernorm.biases.1
+encoder.layers.6.mu_norm.weight
+encoder.layers.6.mu_up.weight
+encoder.layers.6.z_down.weight
 encoder.layers.7.base_layer.self_attn.q_proj.weight
 encoder.layers.7.base_layer.self_attn.k_proj.weight
 encoder.layers.7.base_layer.self_attn.v_proj.weight
@@ -127,6 +130,9 @@ encoder.layers.7.base_layer.post_attention_layernorm.scales.0
 encoder.layers.7.base_layer.post_attention_layernorm.scales.1
 encoder.layers.7.base_layer.post_attention_layernorm.biases.0
 encoder.layers.7.base_layer.post_attention_layernorm.biases.1
+encoder.layers.7.mu_norm.weight
+encoder.layers.7.mu_up.weight
+encoder.layers.7.z_down.weight
 encoder.layers.8.base_layer.self_attn.q_proj.weight
 encoder.layers.8.base_layer.self_attn.k_proj.weight
 encoder.layers.8.base_layer.self_attn.v_proj.weight
@@ -142,6 +148,9 @@ encoder.layers.8.base_layer.post_attention_layernorm.scales.0
 encoder.layers.8.base_layer.post_attention_layernorm.scales.1
 encoder.layers.8.base_layer.post_attention_layernorm.biases.0
 encoder.layers.8.base_layer.post_attention_layernorm.biases.1
+encoder.layers.8.mu_norm.weight
+encoder.layers.8.mu_up.weight
+encoder.layers.8.z_down.weight
 encoder.layers.9.base_layer.self_attn.q_proj.weight
 encoder.layers.9.base_layer.self_attn.k_proj.weight
 encoder.layers.9.base_layer.self_attn.v_proj.weight
@@ -157,6 +166,9 @@ encoder.layers.9.base_layer.post_attention_layernorm.scales.0
 encoder.layers.9.base_layer.post_attention_layernorm.scales.1
 encoder.layers.9.base_layer.post_attention_layernorm.biases.0
 encoder.layers.9.base_layer.post_attention_layernorm.biases.1
+encoder.layers.9.mu_norm.weight
+encoder.layers.9.mu_up.weight
+encoder.layers.9.z_down.weight
 encoder.layers.10.base_layer.self_attn.q_proj.weight
 encoder.layers.10.base_layer.self_attn.k_proj.weight
 encoder.layers.10.base_layer.self_attn.v_proj.weight
@@ -172,6 +184,9 @@ encoder.layers.10.base_layer.post_attention_layernorm.scales.0
 encoder.layers.10.base_layer.post_attention_layernorm.scales.1
 encoder.layers.10.base_layer.post_attention_layernorm.biases.0
 encoder.layers.10.base_layer.post_attention_layernorm.biases.1
+encoder.layers.10.mu_norm.weight
+encoder.layers.10.mu_up.weight
+encoder.layers.10.z_down.weight
 encoder.layers.11.base_layer.self_attn.q_proj.weight
 encoder.layers.11.base_layer.self_attn.k_proj.weight
 encoder.layers.11.base_layer.self_attn.v_proj.weight
@@ -187,6 +202,9 @@ encoder.layers.11.base_layer.post_attention_layernorm.scales.0
 encoder.layers.11.base_layer.post_attention_layernorm.scales.1
 encoder.layers.11.base_layer.post_attention_layernorm.biases.0
 encoder.layers.11.base_layer.post_attention_layernorm.biases.1
+encoder.layers.11.mu_norm.weight
+encoder.layers.11.mu_up.weight
+encoder.layers.11.z_down.weight
 encoder.layers.12.base_layer.self_attn.q_proj.weight
 encoder.layers.12.base_layer.self_attn.k_proj.weight
 encoder.layers.12.base_layer.self_attn.v_proj.weight
@@ -202,6 +220,9 @@ encoder.layers.12.base_layer.post_attention_layernorm.scales.0
 encoder.layers.12.base_layer.post_attention_layernorm.scales.1
 encoder.layers.12.base_layer.post_attention_layernorm.biases.0
 encoder.layers.12.base_layer.post_attention_layernorm.biases.1
+encoder.layers.12.mu_norm.weight
+encoder.layers.12.mu_up.weight
+encoder.layers.12.z_down.weight
 encoder.layers.13.base_layer.self_attn.q_proj.weight
 encoder.layers.13.base_layer.self_attn.k_proj.weight
 encoder.layers.13.base_layer.self_attn.v_proj.weight
@@ -217,6 +238,9 @@ encoder.layers.13.base_layer.post_attention_layernorm.scales.0
 encoder.layers.13.base_layer.post_attention_layernorm.scales.1
 encoder.layers.13.base_layer.post_attention_layernorm.biases.0
 encoder.layers.13.base_layer.post_attention_layernorm.biases.1
+encoder.layers.13.mu_norm.weight
+encoder.layers.13.mu_up.weight
+encoder.layers.13.z_down.weight
 encoder.layers.14.base_layer.self_attn.q_proj.weight
 encoder.layers.14.base_layer.self_attn.k_proj.weight
 encoder.layers.14.base_layer.self_attn.v_proj.weight
@@ -893,6 +917,9 @@ generator.layers.6.base_layer.post_attention_layernorm.scales.0
 generator.layers.6.base_layer.post_attention_layernorm.scales.1
 generator.layers.6.base_layer.post_attention_layernorm.biases.0
 generator.layers.6.base_layer.post_attention_layernorm.biases.1
+generator.layers.6.mu_norm.weight
+generator.layers.6.mu_up.weight
+generator.layers.6.z_down.weight
 generator.layers.7.base_layer.self_attn.q_proj.weight
 generator.layers.7.base_layer.self_attn.k_proj.weight
 generator.layers.7.base_layer.self_attn.v_proj.weight
@@ -908,6 +935,9 @@ generator.layers.7.base_layer.post_attention_layernorm.scales.0
 generator.layers.7.base_layer.post_attention_layernorm.scales.1
 generator.layers.7.base_layer.post_attention_layernorm.biases.0
 generator.layers.7.base_layer.post_attention_layernorm.biases.1
+generator.layers.7.mu_norm.weight
+generator.layers.7.mu_up.weight
+generator.layers.7.z_down.weight
 generator.layers.8.base_layer.self_attn.q_proj.weight
 generator.layers.8.base_layer.self_attn.k_proj.weight
 generator.layers.8.base_layer.self_attn.v_proj.weight
@@ -923,6 +953,9 @@ generator.layers.8.base_layer.post_attention_layernorm.scales.0
 generator.layers.8.base_layer.post_attention_layernorm.scales.1
 generator.layers.8.base_layer.post_attention_layernorm.biases.0
 generator.layers.8.base_layer.post_attention_layernorm.biases.1
+generator.layers.8.mu_norm.weight
+generator.layers.8.mu_up.weight
+generator.layers.8.z_down.weight
 generator.layers.9.base_layer.self_attn.q_proj.weight
 generator.layers.9.base_layer.self_attn.k_proj.weight
 generator.layers.9.base_layer.self_attn.v_proj.weight
@@ -938,6 +971,9 @@ generator.layers.9.base_layer.post_attention_layernorm.scales.0
 generator.layers.9.base_layer.post_attention_layernorm.scales.1
 generator.layers.9.base_layer.post_attention_layernorm.biases.0
 generator.layers.9.base_layer.post_attention_layernorm.biases.1
+generator.layers.9.mu_norm.weight
+generator.layers.9.mu_up.weight
+generator.layers.9.z_down.weight
 generator.layers.10.base_layer.self_attn.q_proj.weight
 generator.layers.10.base_layer.self_attn.k_proj.weight
 generator.layers.10.base_layer.self_attn.v_proj.weight
@@ -953,6 +989,9 @@ generator.layers.10.base_layer.post_attention_layernorm.scales.0
 generator.layers.10.base_layer.post_attention_layernorm.scales.1
 generator.layers.10.base_layer.post_attention_layernorm.biases.0
 generator.layers.10.base_layer.post_attention_layernorm.biases.1
+generator.layers.10.mu_norm.weight
+generator.layers.10.mu_up.weight
+generator.layers.10.z_down.weight
 generator.layers.11.base_layer.self_attn.q_proj.weight
 generator.layers.11.base_layer.self_attn.k_proj.weight
 generator.layers.11.base_layer.self_attn.v_proj.weight
@@ -968,6 +1007,9 @@ generator.layers.11.base_layer.post_attention_layernorm.scales.0
 generator.layers.11.base_layer.post_attention_layernorm.scales.1
 generator.layers.11.base_layer.post_attention_layernorm.biases.0
 generator.layers.11.base_layer.post_attention_layernorm.biases.1
+generator.layers.11.mu_norm.weight
+generator.layers.11.mu_up.weight
+generator.layers.11.z_down.weight
 generator.layers.12.base_layer.self_attn.q_proj.weight
 generator.layers.12.base_layer.self_attn.k_proj.weight
 generator.layers.12.base_layer.self_attn.v_proj.weight
@@ -983,6 +1025,9 @@ generator.layers.12.base_layer.post_attention_layernorm.scales.0
 generator.layers.12.base_layer.post_attention_layernorm.scales.1
 generator.layers.12.base_layer.post_attention_layernorm.biases.0
 generator.layers.12.base_layer.post_attention_layernorm.biases.1
+generator.layers.12.mu_norm.weight
+generator.layers.12.mu_up.weight
+generator.layers.12.z_down.weight
 generator.layers.13.base_layer.self_attn.q_proj.weight
 generator.layers.13.base_layer.self_attn.k_proj.weight
 generator.layers.13.base_layer.self_attn.v_proj.weight
@@ -998,6 +1043,9 @@ generator.layers.13.base_layer.post_attention_layernorm.scales.0
 generator.layers.13.base_layer.post_attention_layernorm.scales.1
 generator.layers.13.base_layer.post_attention_layernorm.biases.0
 generator.layers.13.base_layer.post_attention_layernorm.biases.1
+generator.layers.13.mu_norm.weight
+generator.layers.13.mu_up.weight
+generator.layers.13.z_down.weight
 generator.layers.14.base_layer.self_attn.q_proj.weight
 generator.layers.14.base_layer.self_attn.k_proj.weight
 generator.layers.14.base_layer.self_attn.v_proj.weight

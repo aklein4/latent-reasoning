@@ -46,8 +46,6 @@ class UncondZLmTrainer(BaseTrainer):
             (output.encoder_mus if self.hooked else output.encoder_mus.detach()) - 
             output.generator_mus
         ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            kl = kl.detach()
 
         mean_mus = output.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
