@@ -11,7 +11,7 @@ optimizer_type: adamw
 optimizer_kwargs:
 
     num_warmup_steps: 100
-    num_training_steps: 20000
+    num_training_steps: 50000
 
     lr: 0.00005
     final_lr: 0.000005
@@ -20,10 +20,10 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-checkpoint_interval: 2000
+checkpoint_interval: 2500
 save_optimizer: false
 
-kl_weight: 0.01
+kl_scale: 0.02
 
-upper_p_bound: 0.80
-lower_p_bound: 0.70
+upper_acc_bound: 0.99
+lower_acc_bound: 0.98

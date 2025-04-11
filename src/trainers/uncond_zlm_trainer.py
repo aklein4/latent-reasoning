@@ -45,34 +45,22 @@ class UncondZLmTrainer(BaseTrainer):
         results.elbo = results.lm_loss + results.kl_per_token
 
         # calculate weighted lm loss
-        sinker = 1e-7 + 1 - torch.clip(
-            (logp - np.log(self.lower_p_bound)) / (np.log(self.upper_p_bound) - np.log(self.lower_p_bound)),
+        results.lm_scale = 1e-7 + 1 - torch.clip(
+            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_p_bound),
             min=0.0,
             max=1.0,
         ).detach()
-
-        results.lm_mask = sinker.mean()
-        results.lm_loss_weighted = -(sinker * logp).mean()
+        results.lm_loss_scaled = -(logp * results.lm_scale).mean()
 
         # get weighted kl
         seq_kl = kl.reshape(-1, kl.shape[-2] * kl.shape[-1]).mean(0)
-
-        # table = wandb.Table(
-        #     data=seq_kl.detach().cpu().numpy()[:, None],
-        #     columns=["KL"]
-        # )
-        # results.sequence_kl = wandb.plot.histogram(
-        #     table,
-        #     "position",
-        #     title="Sequence KL",
-        # )
-
         weighted_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7)).detach()
         results.kl_per_token_weighted = weighted_kl.sum() / model.output_length
+        results.kl_per_token_weighted_scaled = self.kl_scale * results.kl_per_token_weighted
 
         results.loss = (
-            results.lm_loss_weighted +
-            self.kl_weight * results.kl_per_token_weighted
+            results.lm_loss_scaled +
+            results.kl_per_token_weighted_scaled
         )
 
         return results

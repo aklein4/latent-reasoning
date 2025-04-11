@@ -265,7 +265,7 @@ class UncondZLmLayer(nn.Module):
             dim=-2
         )
 
-        inp_and_mu = all_noise_or_z.clone().detach()
+        inp_and_mu = all_noise_or_z.clone()
         inp_and_mu[..., self.latent_layer_idx] = mu
 
         hidden_states = torch.cat(
