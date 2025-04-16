@@ -64,7 +64,7 @@ class ZAETrainer(BaseTrainer):
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
-        results.loss = results.lm_loss_weighted
+        results.loss = results.lm_loss_masked
         if self.hooked:
             results.loss = results.loss + self.kl_weight * (
                 results.kl_per_token +
