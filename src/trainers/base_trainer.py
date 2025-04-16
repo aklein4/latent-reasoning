@@ -146,7 +146,7 @@ class BaseTrainer:
                 results.loss.backward()
 
                 if curr_step == 0:
-                    with open("gradients.txt", "w") as f:
+                    with open(os.path.join(constants.LOCAL_DATA_PATH, "gradients.txt"), "w") as f:
 
                         f.write("\n === GRADIENTS === \n\n")
                         for n, p in model.named_parameters():
