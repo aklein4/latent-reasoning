@@ -21,7 +21,7 @@ class SplitCollator:
         data,
     ):
 
-        # get list of arrays tensors
+        # get list of arrays
         input_ids = [load_byte_array(x['input_ids.npy']) for x in data]
         output_ids = [load_byte_array(x['output_ids.npy']) for x in data]
 
