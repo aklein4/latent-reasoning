@@ -25,12 +25,14 @@ def main(args):
     model.gradient_checkpointing_enable()
     
     print("Loading data...")
+    ds_config = train_config["dataset"]
     loader = get_loader(
-        train_config["dataset"],
+        ds_config["name"],
         "train",
         train_config["bs"],
-        train_config["collator_type"],
-        train_config["collator_kwargs"],
+        ds_config["type"],
+        ds_config["kwargs"],
+        ds_config["branch"],
         streaming=True
     )
 

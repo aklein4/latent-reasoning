@@ -22,11 +22,12 @@ def get_loader(
     bs: int,
     collator_type: str,
     collator_kwargs: dict,
+    branch: str = "main",
     streaming: bool = True,
 ):
     dataset = datasets.load_dataset(
         "webdataset",
-        data_files=get_hf_files(constants.HF_ID, name),
+        data_files=get_hf_files(constants.HF_ID, name, branch=branch),
         split=split,
         streaming=streaming
     )

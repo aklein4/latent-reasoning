@@ -1,8 +1,11 @@
 trainer_type: zae
 
-dataset: fineweb-100BT-split-128
-collator_type: split
-collator_kwargs: {}
+dataset:
+    name: fineweb-100BT-split-128
+    branch: split-1
+
+    type: split
+    kwargs: {}
 
 bs: 256
 num_epochs: 1
