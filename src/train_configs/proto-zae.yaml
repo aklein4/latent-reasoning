@@ -29,7 +29,7 @@ save_optimizer: false
 upper_p_bound: 0.75
 lower_p_bound: 0.50
 
-acc_hook: 0.5
+hook_acc: 0.5
 
 kl_weight: 0.01
 mean_weight: 0.1
