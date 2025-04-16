@@ -28,7 +28,7 @@ class ZAEConfig(PretrainedConfig):
         output_length: int = 128,
         latent_length: int = 16,
         latent_size: int = 128,
-        num_vae_layers: int = 12,
+        num_decoder_layers: int = 12,
         *args,
         **kwargs
     ):
@@ -41,7 +41,7 @@ class ZAEConfig(PretrainedConfig):
         self.latent_length = latent_length
         self.latent_size = latent_size
 
-        self.num_vae_layers = num_vae_layers
+        self.num_decoder_layers = num_decoder_layers
 
         super().__init__(*args, **kwargs)
 
@@ -188,11 +188,11 @@ class ZAEModel(PreTrainedModel):
 
         # modify the vae config
         tmp_config = base_model.model.config.to_dict()
-        tmp_config["num_hidden_layers"] = config.num_vae_layers
+        tmp_config["num_hidden_layers"] = config.num_decoder_layers
         short_config = LlamaConfig(**tmp_config)
 
         # create the encoder and decoder
-        self.encoder = LlamaModel(short_config)
+        self.encoder = LlamaModel(base_model.model.config)
         self.generator = LlamaModel(base_model.model.config)
         self.decoder = LlamaModel(short_config)
 
