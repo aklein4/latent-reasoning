@@ -88,6 +88,7 @@ class ZLmTrainer(BaseTrainer):
 
         if not self.hooked:
             results.weighted_hidden_kl_per_token = results.hidden_kl_per_token.detach()
+            results.weighted_output_kl_per_token = results.output_kl_per_token
 
             if results.output_kl_per_token.item() < self.hook_kl:
                 self.hooked = True
