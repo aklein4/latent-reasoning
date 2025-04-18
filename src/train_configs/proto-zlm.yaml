@@ -8,14 +8,14 @@ dataset:
     kwargs:
         checkpoint_path: local_data/proto-zlm_zae-beta/000000030000
 
-bs: 128
+bs: 64
 num_epochs: 1
 
 optimizer_type: adamw
 optimizer_kwargs:
 
     num_warmup_steps: 1000
-    num_training_steps: 20000
+    num_training_steps: 50000
 
     lr: 0.00005
     final_lr: 0.000005
@@ -24,7 +24,7 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-checkpoint_interval: 2000
+checkpoint_interval: 5000
 save_optimizer: false
 
 hook_kl: 5.0
