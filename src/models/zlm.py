@@ -8,7 +8,7 @@ from transformers import (
 )
 
 from utils.dot_dict import DotDict
-from utils.model_utils import unsqueeze_to_batch, expand_to_batch
+from utils.model_utils import unsqueeze_to_batch, expand_to_batch, SoftmaxPooler
 import utils.constants as constants
 
 
@@ -27,8 +27,11 @@ class ZLmConfig(PretrainedConfig):
         input_length: int = 128,
         output_length: int = 128,
         z_length: int = 512,
-        latent_size: int = 128,
-        z_init_scale: float = 0.1,
+        latent_size_per_layer: int = 8,
+        num_latent_layers: int = 10,
+        target_length: int = 16,
+        target_size: int = 128,
+        output_head_size: int = 8192,
         *args,
         **kwargs
     ):
@@ -39,11 +42,65 @@ class ZLmConfig(PretrainedConfig):
         self.output_length = output_length
 
         self.z_length = z_length
-        self.latent_size = latent_size
+        self.latent_size_per_layer = latent_size_per_layer
+        self.num_latent_layers = num_latent_layers
         
-        self.z_init_scale = z_init_scale
+        self.target_length = target_length
+        self.target_size = target_size
+
+        self.output_head_size = output_head_size
 
         super().__init__(*args, **kwargs)
+
+
+class LatentShaper:
+
+    def __init__(self, latent_size_per_layer, num_latent_layers):
+        self.latent_size_per_layer = latent_size_per_layer
+        self.num_latent_layers = num_latent_layers
+        
+        self.total_latent_size = latent_size_per_layer * num_latent_layers
+
+
+    def layerfy(self, x):
+        assert x.shape[-1] == self.total_latent_size, f"Expected last dimension to be {self.latent_size}, but got {x.shape[-1]}"
+        return x.view(
+            *x.shape[:-1],
+            self.latent_size_per_layer,
+            self.num_latent_layers,
+        )
+    
+
+    def unlayerfy(self, x):
+        assert x.shape[-2:] == (self.latent_size_per_layer, self.num_latent_layers), f"Expected last two dimensions to be ({self.latent_size_per_layer}, {self.num_latent_layers}), but got {x.shape[-2:]}"
+        return x.view(
+            *x.shape[:-2],
+            self.total_latent_size,
+        )
+
+
+class Padder:
+
+    def __init__(self, pad_length):
+        self.pad_length = pad_length
+
+
+    def pad(self, x):
+        return torch.cat(
+            [
+                torch.zeros_like(x[..., :1, :]).expand(
+                    *[-1 for _ in range(x.ndim - 2)],
+                    self.pad_length,
+                    -1
+                ),
+                x,
+            ],
+            dim=-2
+        )
+
+
+    def unpad(self, x):
+        return x[..., self.pad_length:, :]
 
 
 class ModulatingRMSNorm(nn.Module):
@@ -65,7 +122,12 @@ class ModulatingRMSNorm(nn.Module):
 
         self.scales = nn.ParameterList(
             [
-                old_norm.weight.data.clone().detach() for _ in range(self.num_strides)
+                nn.Parameter(old_norm.weight.data.clone().detach()) for _ in range(self.num_strides)
+            ]
+        )
+        self.biases = nn.ParameterList(
+            [
+                nn.Parameter(torch.zeros_like(old_norm.weight.data)) for _ in range(self.num_strides)
             ]
         )
 
@@ -73,17 +135,22 @@ class ModulatingRMSNorm(nn.Module):
         self.dropout = None
     
 
-    def _get_scales(self):
+    def _get_scales_and_biases(self):
 
         out = []
+        out_bias = []
         for i in range(self.num_strides):
             scale = self.scales[i]
+            bias = self.biases[i]
             stride = self.strides[i]
 
             expanded_scale = scale[None].expand(stride, *([-1] * self.num_d))
             out.append(expanded_scale)
         
-        return torch.cat(out, dim=0)
+            expanded_bias = bias[None].expand(stride, *([-1] * self.num_d))
+            out_bias.append(expanded_bias)
+
+        return torch.cat(out, dim=0), torch.cat(out_bias, dim=0)
 
 
     def forward(self, x):
@@ -91,16 +158,152 @@ class ModulatingRMSNorm(nn.Module):
         x = self.norm(x)
 
         if self.index is None:
-            scales = self._get_scales()
+            scales, biases = self._get_scales_and_biases()
             scales = unsqueeze_to_batch(scales, x)
+            biases = unsqueeze_to_batch(biases, x)
+
         else:
             scales = self.scales[self.index]
+            biases = self.biases[self.index]
+
             scales = unsqueeze_to_batch(scales, x)
+            biases = unsqueeze_to_batch(biases, x)
 
         if self.dropout is not None:
             x = F.dropout(x, p=self.dropout)
 
-        return x * scales
+        return (x * scales) + biases
+
+
+class PassZLmLayer(nn.Module):
+
+    def __init__(self, base_layer):
+        super().__init__()
+        self.base_layer = base_layer
+        self.hidden_size = base_layer.hidden_size
+
+
+    def forward(
+        self,
+        hidden_states,
+        *args,
+        **kwargs,
+    ):
+        extra = hidden_states[..., self.hidden_size:]
+        out = self.base_layer(
+            hidden_states[..., :self.hidden_size],
+            *args,
+            **kwargs,
+        )
+
+        return (
+            torch.cat([out[0], extra], dim=-1),
+        ) + out[1:] # extra things in tuple
+
+
+class ZLmLayer(nn.Module):
+
+    def __init__(
+        self,
+        config: ZLmConfig,
+        is_encoder,
+        base_layer,
+        prefix_length,
+        layer_idx,
+        latent_layer_idx,
+    ):
+        super().__init__()
+        
+        self.is_encoder = is_encoder
+
+        self.base_layer = base_layer
+        self.hidden_size = base_layer.hidden_size
+
+        self.latent_size_per_layer = config.latent_size_per_layer
+        self.num_latent_layers = config.num_latent_layers
+        self.total_latent_size = config.latent_size_per_layer * config.num_latent_layers
+
+        self.prefix_length = prefix_length
+        self.layer_idx = layer_idx
+        self.latent_layer_idx = latent_layer_idx
+
+        self.mu_norm = nn.RMSNorm(
+            normalized_shape=self.hidden_size,
+            eps=self.base_layer.input_layernorm.norm.eps,
+            elementwise_affine=True
+        )
+        self.mu_up = nn.Linear(
+            self.hidden_size,
+            self.latent_size_per_layer,
+            bias=False
+        )
+        self.z_down = nn.Linear(
+            self.latent_size_per_layer,
+            self.hidden_size,
+            bias=False
+        )
+
+        self.shaper = LatentShaper(
+            self.latent_size_per_layer,
+            self.num_latent_layers
+        )
+
+
+    def forward(
+        self,
+        hidden_states,
+        *args,
+        **kwargs,
+    ):
+        
+        # hack to get arguments through existing LlamaModel
+        total_noise_or_z = self.shaper.layerfy(hidden_states[..., self.hidden_size:])
+        noise_or_z = total_noise_or_z[..., self.latent_layer_idx]
+        
+        # pass through the base layer
+        hidden_states = hidden_states[..., :self.hidden_size]
+        base_out = self.base_layer(
+            hidden_states,
+            *args,
+            **kwargs,
+        )
+        hidden_states = base_out[0]
+
+        # get mu
+        mu = self.mu_up(
+            self.mu_norm(hidden_states)
+        )
+
+        # get z
+        if self.is_encoder:
+            # noise_or_z should be noise
+            z = noise_or_z + mu
+        else:
+            # noise_or_z should be z
+            z = noise_or_z
+
+        # add z to the residual stream
+        y = self.z_down(z)
+        hidden_states = torch.cat(
+            [
+                hidden_states[..., :self.prefix_length, :],
+                hidden_states[..., self.prefix_length:, :] + y[..., self.prefix_length:, :],
+            ],
+            dim=-2
+        )
+
+        total_noise_or_z_with_mu = total_noise_or_z.clone()
+        total_noise_or_z_with_mu[..., self.latent_layer_idx] = mu
+
+        hidden_states = torch.cat(
+            [
+                hidden_states,
+                self.shaper.unlayerfy(total_noise_or_z_with_mu),
+            ],
+            dim=-1
+        )
+
+        return (hidden_states,) + base_out[1:]
 
 
 class ZLmModel(PreTrainedModel):
@@ -118,9 +321,18 @@ class ZLmModel(PreTrainedModel):
         self.output_length = config.output_length
 
         self.z_length = config.z_length
-        self.num_z = self.z_length - 1
+        self.num_latent_layers = config.num_latent_layers
+        self.latent_size_per_layer = config.latent_size_per_layer
+        self.total_latent_size = config.latent_size_per_layer * config.num_latent_layers
 
-        self.latent_size = config.latent_size
+        self.shaper = LatentShaper(
+            self.latent_size_per_layer,
+            self.num_latent_layers
+        )
+
+        self.target_length = config.target_length
+        self.target_size = config.target_size
+        self.total_target_size = config.target_length * config.target_size
 
         # get base model
         base_model = LlamaForCausalLM.from_pretrained(
@@ -135,45 +347,53 @@ class ZLmModel(PreTrainedModel):
         else:
             base_model.config._attn_implementation = "eager"
 
+        # save extra config
         self.hidden_size = base_model.config.hidden_size
 
         # copy token embeddings (clone to untie)
         self.embed_tokens = base_model.model.embed_tokens
         self.embed_tokens.weight = nn.Parameter(self.embed_tokens.weight.data.clone().detach())
 
-        self.lm_head = base_model.lm_head
-        self.lm_head.weight = nn.Parameter(self.lm_head.weight.data.clone().detach())
-
         # calculate embedding stats
-        embed_std = self.embed_tokens.weight.data.std(0).detach()
-        embed_mean = self.embed_tokens.weight.data.mean(0).detach()
+        embed_std = self.embed_tokens.weight.data.std(0, keepdim=True).detach()
+        embed_mean = self.embed_tokens.weight.data.mean(0, keepdim=True).detach()
 
         # create encoder special tokens
         self.encoder_sep_token = nn.Parameter(
-            (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
+            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+        )
+        self.encoder_target_tokens = nn.Parameter(
+            torch.randn(self.target_length, self.hidden_size) * embed_std + embed_mean
         )
         self.encoder_z_tokens = nn.Parameter(
-            torch.randn(self.num_z, self.hidden_size) * embed_std[None] + embed_mean[None]
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
-        # create decoder special tokens
-        self.decoder_z_tokens = nn.Parameter(
-            torch.randn(self.z_length, self.hidden_size)[None] * embed_std[None] + embed_mean[None]
-        )
-        self.decoder_start_output_token = nn.Parameter(
-            (torch.randn(self.hidden_size) * embed_std + embed_mean)[None]
+        # create generator special tokens
+        self.generator_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
         # create the encoder and decoder
         self.encoder = LlamaModel(base_model.model.config)
-        self.decoder = LlamaModel(base_model.model.config)
+        self.generator = LlamaModel(base_model.model.config)
 
         # copy the encoder and decoder params from the base model
         transformers_with_strides = [
-            (self.encoder, [self.input_length, self.output_length + 1, self.num_z]),
-            (self.decoder, [self.input_length, self.z_length, self.output_length]),
+            (
+                self.encoder,
+                [self.input_length, 1 + self.output_length, self.target_length, self.z_length], # +1 for sep token
+                self.input_length + 1 + self.output_length + self.target_length,
+                True
+            ),
+            (
+                self.generator,
+                [self.input_length, self.z_length],
+                self.input_length,
+                False
+            ),
         ]
-        for transformer, strides in transformers_with_strides:
+        for transformer, strides, prefix, is_encoder in transformers_with_strides:
             transformer.load_state_dict({k: v.clone().detach() for k, v in base_model.model.state_dict().items()})
 
             # replace the layernorms with modulating RMSNorms
@@ -186,32 +406,58 @@ class ZLmModel(PreTrainedModel):
                     layer.post_attention_layernorm,
                     strides
                 )
+            
+            # replace the existing layers with ZLmLayers
+            latent_i = 0
+            for i, layer in enumerate(transformer.layers):
 
-        # reset the scales of the encoder norms to 1
-        self.encoder.norm.weight.data = torch.ones_like(self.encoder.norm.weight.data)
+                # latent layers
+                if (len(transformer.layers) - i) <= self.num_latent_layers:
+                    transformer.layers[i] = ZLmLayer(
+                        config,
+                        is_encoder,
+                        layer,
+                        prefix,
+                        i,
+                        latent_i
+                    )
+                    latent_i += 1
 
-        # replace the output norms in the decoder to seperate z and lm outputs
-        self.lm_norm = self.decoder.norm
-        self.z_norm = nn.RMSNorm(
+                # pass through these layers
+                else:
+                    transformer.layers[i] = PassZLmLayer(layer)
+            
+            # store the latent layers
+            transformer.latent_layers = transformer.layers[-self.num_latent_layers:]
+
+            # create the padder for the transformer
+            transformer.padder = Padder(prefix)
+
+        # create the input linears
+        self.encoder_target_proj_in = nn.Linear(self.target_size, self.hidden_size, bias=False)
+        self.encoder_noise_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
+        self.generator_z_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
+
+        # scale input layers by embedding stats
+        self.encoder_target_proj_in.weight.data *= embed_std[0][..., None]
+        self.encoder_noise_proj_in.weight.data *= embed_std[0][..., None]
+        self.generator_z_proj_in.weight.data *= embed_std[0][..., None]
+
+        # fix the output norms
+        self.encoder.norm = nn.Identity()
+        self.generator.norm = nn.Identity()
+
+        # create the output head
+        self.norm = nn.RMSNorm(
             self.hidden_size,
-            eps=base_model.config.rms_norm_eps
+            eps=base_model.model.config.rms_norm_eps,
+            elementwise_affine=True
         )
-
-        self.decoder.norm = nn.Identity()
-        
-        # create the encoder io linears
-        self.encoder_noise_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
-        self.encoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
-
-        self.encoder_noise_proj_in.weight.data *= embed_std[..., None]
-        self.encoder_mu_proj_out.weight.data *= self.config.z_init_scale
-
-        # create the decoder io linears
-        self.decoder_z_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
-        self.decoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
-
-        self.decoder_z_proj_in.weight.data *= embed_std[..., None]
-        self.decoder_mu_proj_out.weight.data *= self.config.z_init_scale
+        self.head = SoftmaxPooler(
+            self.hidden_size,
+            config.output_head_size,
+            self.total_target_size,
+        )
 
         # Initialize weights and gradient checkpointing
         self.post_init()
@@ -221,11 +467,12 @@ class ZLmModel(PreTrainedModel):
     def init_weights(self):
         return
 
-
+    
     def forward(
         self,
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
+        target: torch.FloatTensor,
     ):
         
         # get the input and output tokens
@@ -235,8 +482,8 @@ class ZLmModel(PreTrainedModel):
         # generate the noise
         noise = torch.randn(
             *input_ids.shape[:-1],
-            self.num_z,
-            self.latent_size,
+            self.z_length,
+            self.total_latent_size,
         ).to(input_tokens)
 
         # get the encoder input
@@ -245,59 +492,62 @@ class ZLmModel(PreTrainedModel):
                 input_tokens,
                 expand_to_batch(self.encoder_sep_token, input_tokens),
                 output_tokens,
-                expand_to_batch(self.encoder_z_tokens[:1], input_tokens),
-                expand_to_batch(self.encoder_z_tokens[1:], input_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
+                expand_to_batch(self.encoder_target_tokens, input_tokens) + self.encoder_target_proj_in(target),
+                expand_to_batch(self.encoder_z_tokens[:1], output_tokens),
+                expand_to_batch(self.encoder_z_tokens[1:], output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
             ],
             dim=-2
+        )
+        encoder_hidden_states = torch.cat(
+            [
+                encoder_hidden_states,
+                self.encoder.padder.pad(noise)
+            ],
+            dim=-1
         )
 
         # pass through the encoder
         encoder_hidden_states = self.encoder(
-            inputs_embeds=encoder_hidden_states,
+            inputs_embeds=encoder_hidden_states
         ).last_hidden_state
-
-        # get the latent distribution from the encoder output
-        encoder_mus = self.encoder_mu_proj_out(
-            encoder_hidden_states[..., -self.num_z:, :]
-        )
+        
+        # get flattened mus and z
+        encoder_mus = self.encoder.padder.unpad(encoder_hidden_states[..., self.hidden_size:])
         z = noise + encoder_mus
 
-        # get the decoder input
-        decoder_hidden_states = torch.cat(
+        # get the generator input
+        generator_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.decoder_z_tokens[:1], input_tokens),
-                expand_to_batch(self.decoder_z_tokens[1:], input_tokens) + self.decoder_z_proj_in(z),
-                expand_to_batch(self.decoder_start_output_token, input_tokens),
-                output_tokens[..., :-1, :],
+                expand_to_batch(self.generator_z_tokens[:1], input_tokens),
+                expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
             ],
             dim=-2
         )
+        generator_hidden_states = torch.cat(
+            [
+                generator_hidden_states,
+                self.generator.padder.pad(z)
+            ],
+            dim=-1
+        )
 
-        # pass through the decoder
-        decoder_hidden_states = self.decoder(
-            inputs_embeds=decoder_hidden_states,
+        # pass through the generator
+        generator_hidden_states = self.generator(
+            inputs_embeds=generator_hidden_states,
         ).last_hidden_state
 
-        # get the decoder latent distribution
-        decoder_mus = self.decoder_mu_proj_out(
-            self.z_norm(
-                decoder_hidden_states[..., self.input_length:(self.input_length + self.num_z), :]
-            )
-        )
+        # get the flattened generator mus
+        generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
 
-        # get the decoder lm output
-        decoder_lm_logits = self.lm_head(
-            self.lm_norm(
-                decoder_hidden_states[..., -self.output_length:, :]
-            )
-        )
-        decoder_lm_logits = F.log_softmax(decoder_lm_logits, dim=-1)
+        # get the output
+        output_states = self.norm(generator_hidden_states[..., -self.z_length:, :self.hidden_size])
+        output = self.head(output_states).view(target.shape)
 
         return DotDict(
-            encoder_mus=encoder_mus,
-            decoder_mus=decoder_mus,
-            lm_logits=decoder_lm_logits,
+            encoder_mus=self.shaper.layerfy(encoder_mus),
+            generator_mus=self.shaper.layerfy(generator_mus),
+            output=output
         )
 
 

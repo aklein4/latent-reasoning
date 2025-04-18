@@ -333,3 +333,32 @@ class ZAEModel(PreTrainedModel):
             generator_mus=generator_mus,
             lm_logits=decoder_lm_logits,
         )
+
+
+    def encode(
+        self,
+        output_ids: torch.LongTensor,
+    ):
+        
+        # get the output tokens
+        output_tokens = self.embed_tokens(output_ids)
+
+        # get the encoder input
+        encoder_hidden_states = torch.cat(
+            [
+                expand_to_batch(self.encoder_bos_token, output_tokens),
+                output_tokens,
+                expand_to_batch(self.encoder_z_tokens, output_tokens),
+            ],
+            dim=-2
+        )
+
+        # pass through the encoder
+        encoder_hidden_states = self.encoder(
+            inputs_embeds=encoder_hidden_states
+        ).last_hidden_state
+        encoder_mus = self.encoder_mu_proj_out(
+            encoder_hidden_states[..., -self.latent_length:, :]
+        )
+
+        return encoder_mus

@@ -11,6 +11,10 @@ out_length: 128
 
 z_length: 512
 
-latent_size: 128
+latent_size_per_layer: 8
+num_latent_layers: 16
 
-z_init_scale: 1.0
+target_length: 32
+target_size: 128
+
+output_head_size: 8192

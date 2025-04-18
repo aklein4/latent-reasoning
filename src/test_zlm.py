@@ -12,7 +12,7 @@ def main():
 
     print("loading model...")
     config = load_config(MODEL_CONFIG, "model")
-    model = ZLmModel(ZLmConfig(**config))
+    model = ZLmModel(ZLmConfig(**config), cpu=True)
     print("Model loaded!")
 
     input_ids = torch.randint(
@@ -25,9 +25,12 @@ def main():
         size=(3, model.output_length),
         dtype=torch.long
     )
+    target = torch.randn(
+        (3, model.target_length, model.target_size)
+    )
 
     print("Running model...")
-    out = model(input_ids, output_ids)
+    out = model(input_ids, output_ids, target)
     print("Model run complete!")
 
     print("Output shapes:")

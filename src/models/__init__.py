@@ -20,3 +20,30 @@ MODEL_DICT = {
     "uncond_zlm": UncondZLmModel,
     "zae": ZAEModel,
 }
+
+
+import torch
+import os
+import json
+
+import utils.constants as constants
+
+
+def load_checkpoint(
+    path: str,
+):
+    cpkt_path = os.path.join(constants.BASE_PATH, path, "checkpoint.ckpt")
+    config_path = os.path.join(constants.BASE_PATH, path, "config.json")
+
+    with open(config_path, "r") as f:
+        model_type = json.load(f)["model_type"]
+
+    config = CONFIG_DICT[model_type].from_json_file(config_path)
+    model = MODEL_DICT[model_type](config)
+
+    model.load_state_dict(
+        torch.load(cpkt_path, map_location="cpu")["model"],
+        strict=True
+    )
+
+    return model

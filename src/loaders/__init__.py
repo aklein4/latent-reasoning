@@ -1,10 +1,11 @@
 """ Dataloaders for the project. """
 
 from loaders.split import SplitCollator
-
+from loaders.zae import ZAECollator
 
 COLLATOR_DICT = {
     "split": SplitCollator,
+    "zae": ZAECollator,
 }
 
 

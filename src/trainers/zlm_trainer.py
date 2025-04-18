@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
-
-from wandb import Histogram
+from wandb import Image
 
 from trainers.base_trainer import BaseTrainer
 from utils.model_utils import scale_gradient
@@ -13,80 +12,101 @@ from utils.dot_dict import DotDict
 
 class ZLmTrainer(BaseTrainer):
     
+    running_hidden_kls_per_channel = None
+    running_output_kls_per_channel = None
+
     hooked = False
-    warmup_step_progress = 0
 
 
-    def train_step(self, step, model, input_ids, output_ids):
+    def train_step(self, step, model, input_ids, output_ids, target):
+        bs = input_ids.shape[0]
+        target_size = target[0].numel()
 
         # get model predictions
-        output = model(input_ids, output_ids)
+        model_out = model(input_ids, output_ids, target)
 
-        # extract probabilities
-        logp = torch.take_along_dim(
-            output.lm_logits,
-            output_ids[..., None],
-            dim=-1,
-        )[..., 0]
+        encoder_mus = model_out.encoder_mus
+        generator_mus = model_out.generator_mus
+        output = model_out.output.reshape(bs, -1)
+        target = target.reshape(bs, -1)
 
-        kl = (
-            scale_gradient(output.encoder_mus, self.encoder_grad_scale) - output.decoder_mus
-        ).pow(2).sum(-1) / 2
-
-        mean_mus = output.decoder_mus.mean(0, keepdim=True)
-        mean_kl = (
-            output.encoder_mus - mean_mus
-        ).pow(2).sum(-1).detach() / 2
-
-        # calculate lm metrics
-        results = DotDict(
-            lm_loss = -logp.mean(),
-            lm_pcorr = logp.exp().mean(),
-            lm_acc = (output.lm_logits.argmax(-1) == output_ids).float().mean(),
-        )
-        
         # calculate kl metrics
-        results.kl_per_channel = kl.mean() / model.latent_size
-        results.kl_per_token = kl.mean() * model.num_z / model.output_length
-        results.kl_per_token_mean = mean_kl.mean() * model.num_z / model.output_length
-        results.elbo = results.lm_loss + results.kl_per_token
+        hidden_kl = (
+            encoder_mus - generator_mus
+        ).pow(2).sum(-2) / 2
+        hidden_kl = hidden_kl.reshape(bs, -1)
 
-        # calculate weighted lm loss
-        sinker = 1e-7 + 1 - torch.clip(
-            (logp - np.log(self.lower_p_bound)) / (np.log(self.upper_p_bound) - np.log(self.lower_p_bound)),
-            min=0.0,
-            max=1.0,
-        ).detach()
+        output_kl = (
+            output - target
+        ).pow(2).sum(-1)[..., None] / 2
 
-        results.lm_mask = sinker.mean()
-        results.lm_loss_weighted = -(sinker * logp).mean()
+        results = DotDict(
+            hidden_kl_per_token = (hidden_kl.mean(0).sum() / model.output_length),
+            output_kl_per_token = (output_kl.mean(0).sum() / model.output_length),
+            hidden_kl_per_channel = (hidden_kl.mean() / model.latent_size_per_layer),
+            output_kl_per_channel = (output_kl.mean() / target_size),
+        )
+        results.total_kl_per_token = results.hidden_kl_per_token + results.output_kl_per_token
 
-        # get weighted kl
-        seq_kl = kl.reshape(-1, kl.shape[-1]).mean(0)
-        weighted_kl = seq_kl * (seq_kl / (seq_kl.mean() + 1e-7)).detach()
+        # save the running metrics
+        hidden_kl_per_channel_mean = (hidden_kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
+        output_kl_per_channel_mean = (output_kl.mean(0) / target_size).detach().clone().float()
 
-        results.sequence_kl = Histogram(np_histogram=(
-            seq_kl.detach().cpu().numpy(),
-            np.arange(seq_kl.shape[0]+1).astype(float),
-        ))
-        results.kl_per_token_weighted = weighted_kl.sum() / model.output_length
+        if self.running_hidden_kls_per_channel is None:
+            self.running_hidden_kls_per_channel = hidden_kl_per_channel_mean
+            self.running_output_kls_per_channel = output_kl_per_channel_mean
+        else:
+            self.running_hidden_kls_per_channel = self.running_hidden_kls_per_channel * self.running_beta + hidden_kl_per_channel_mean * (1 - self.running_beta)
+            self.running_output_kls_per_channel = self.running_output_kls_per_channel * self.running_beta + output_kl_per_channel_mean * (1 - self.running_beta)
+
+        # balance the hidden and output kls
+        denom = (
+            self.running_hidden_kls_per_channel.mean() +
+            self.running_output_kls_per_channel.mean() +
+            1e-7
+        )
+        w_hidden_kl = self.running_hidden_kls_per_channel.mean() / denom
+        w_output_kl = self.running_output_kls_per_channel.mean() / denom
+
+        # make sure the total weights are unchanged
+        og_total = encoder_mus[0].numel() + target_size
+        w_total = (
+            w_hidden_kl * encoder_mus[0].numel() +
+            w_output_kl * target_size +
+            1e-7
+        )
+
+        results.w_hidden_kl = w_hidden_kl * og_total / w_total
+        results.w_output_kl = w_output_kl * og_total / w_total
+
+        # balance the hidden kl weights
+        sequence_kl_weights = self.running_hidden_kls_per_channel / (self.running_hidden_kls_per_channel.mean() + 1e-7)
+        sequence_kl_per_token = (hidden_kl.mean(0) * sequence_kl_weights).sum() / model.output_length
+
+        results.weighted_hidden_kl_per_token = sequence_kl_per_token * w_hidden_kl
+        results.weighted_output_kl_per_token = results.output_kl_per_token * w_output_kl
 
         if not self.hooked:
-            if results.lm_acc >= self.hook_acc:
-                self.hooked = True
-                results.reset_optimizer = 1.0
-        else:
-            self.warmup_step_progress += 1
+            results.weighted_hidden_kl_per_token = results.hidden_kl_per_token.detach()
 
-        results.kl_weight = min(
-            self.warmup_step_progress / self.kl_warmup_steps,
-            1.0,
-        )
+            if results.output_kl_per_token.item() < self.hook_kl:
+                self.hooked = True
+
+                self.running_hidden_kls_per_channel = None
+                self.running_output_kls_per_channel = None
+
+                results.reset_optimizer = 1.0
 
         results.loss = (
-            results.lm_loss_weighted +
-            (results.kl_weight * results.kl_per_token_weighted if self.hooked else 0.0)
+            results.weighted_hidden_kl_per_token +
+            results.weighted_output_kl_per_token
         )
+
+        if step % self.log_image_interval == 0:
+            results.kl_weights = Image(
+                self.running_hidden_kls_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_hidden_kls_per_channel.max().item(),
+                mode='L'
+            )
 
         return results
     
