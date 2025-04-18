@@ -15,7 +15,11 @@ class ZLmTrainer(BaseTrainer):
     running_hidden_kls_per_channel = None
     running_output_kls_per_channel = None
 
-    hooked = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.hooked = self.init_hooked
 
 
     def train_step(self, step, model, input_ids, output_ids, target):
