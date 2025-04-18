@@ -473,6 +473,7 @@ class ZLmModel(PreTrainedModel):
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
         target: torch.FloatTensor,
+        noise_scale: float = 1.0,
     ):
         
         # get the input and output tokens
@@ -484,7 +485,7 @@ class ZLmModel(PreTrainedModel):
             *input_ids.shape[:-1],
             self.z_length,
             self.total_latent_size,
-        ).to(input_tokens)
+        ).to(input_tokens) * noise_scale
 
         # get the encoder input
         encoder_hidden_states = torch.cat(

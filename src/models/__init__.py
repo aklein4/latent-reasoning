@@ -31,6 +31,7 @@ import utils.constants as constants
 
 def load_checkpoint(
     path: str,
+    **model_kwargs
 ):
     cpkt_path = os.path.join(constants.BASE_PATH, path, "checkpoint.ckpt")
     config_path = os.path.join(constants.BASE_PATH, path, "config.json")
@@ -39,7 +40,7 @@ def load_checkpoint(
         model_type = json.load(f)["model_type"]
 
     config = CONFIG_DICT[model_type].from_json_file(config_path)
-    model = MODEL_DICT[model_type](config)
+    model = MODEL_DICT[model_type](config, **model_kwargs)
 
     model.load_state_dict(
         torch.load(cpkt_path, map_location="cpu")["model"],

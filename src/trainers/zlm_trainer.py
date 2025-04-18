@@ -16,18 +16,14 @@ class ZLmTrainer(BaseTrainer):
     running_output_kls_per_channel = None
 
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.hooked = self.init_hooked
-
-
     def train_step(self, step, model, input_ids, output_ids, target):
         bs = input_ids.shape[0]
         target_size = target[0].numel()
 
+        noise_scale = min(1.0, step / self.noise_scale_steps)
+
         # get model predictions
-        model_out = model(input_ids, output_ids, target)
+        model_out = model(input_ids, output_ids, target, noise_scale=noise_scale)
 
         encoder_mus = model_out.encoder_mus
         generator_mus = model_out.generator_mus
@@ -45,6 +41,7 @@ class ZLmTrainer(BaseTrainer):
         ).pow(2).sum(-1)[..., None] / 2
 
         results = DotDict(
+            noise_scale=noise_scale,
             hidden_kl_per_token = (hidden_kl.mean(0).sum() / model.output_length),
             output_kl_per_token = (output_kl.mean(0).sum() / model.output_length),
             hidden_kl_per_channel = (hidden_kl.mean() / model.latent_size_per_layer),
@@ -63,7 +60,7 @@ class ZLmTrainer(BaseTrainer):
             self.running_hidden_kls_per_channel = self.running_hidden_kls_per_channel * self.running_beta + hidden_kl_per_channel_mean * (1 - self.running_beta)
             self.running_output_kls_per_channel = self.running_output_kls_per_channel * self.running_beta + output_kl_per_channel_mean * (1 - self.running_beta)
 
-        # balance the hidden and output kls
+        # balance the hidden vs output kls
         denom = (
             self.running_hidden_kls_per_channel.mean() +
             self.running_output_kls_per_channel.mean() +
@@ -79,7 +76,6 @@ class ZLmTrainer(BaseTrainer):
             w_output_kl * target_size +
             1e-7
         )
-
         results.w_hidden_kl = w_hidden_kl * og_total / w_total
         results.w_output_kl = w_output_kl * og_total / w_total
 
@@ -87,26 +83,14 @@ class ZLmTrainer(BaseTrainer):
         sequence_kl_weights = self.running_hidden_kls_per_channel / (self.running_hidden_kls_per_channel.mean() + 1e-7)
         sequence_kl_per_token = (hidden_kl.mean(0) * sequence_kl_weights).sum() / model.output_length
 
+        # get the weighted kls
         results.weighted_hidden_kl_per_token = sequence_kl_per_token * w_hidden_kl
         results.weighted_output_kl_per_token = results.output_kl_per_token * w_output_kl
 
-        if not self.hooked:
-
-            results.loss = results.output_kl_per_token
-
-            if results.output_kl_per_token.item() < self.hook_kl:
-                self.hooked = True
-
-                self.running_hidden_kls_per_channel = None
-                self.running_output_kls_per_channel = None
-
-                results.reset_optimizer = 1.0
-
-        else:
-            results.loss = (
-                results.weighted_hidden_kl_per_token +
-                results.weighted_output_kl_per_token
-            )
+        results.loss = (
+            results.weighted_hidden_kl_per_token +
+            results.weighted_output_kl_per_token
+        )
 
         if step % self.log_image_interval == 0:
             results.kl_weights = Image(
