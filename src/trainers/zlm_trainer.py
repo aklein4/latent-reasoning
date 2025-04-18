@@ -87,8 +87,8 @@ class ZLmTrainer(BaseTrainer):
         results.weighted_output_kl_per_token = results.output_kl_per_token * w_output_kl
 
         if not self.hooked:
-            results.weighted_hidden_kl_per_token = results.hidden_kl_per_token.detach()
-            results.weighted_output_kl_per_token = results.output_kl_per_token
+
+            results.loss = results.output_kl_per_token
 
             if results.output_kl_per_token.item() < self.hook_kl:
                 self.hooked = True
@@ -98,10 +98,11 @@ class ZLmTrainer(BaseTrainer):
 
                 results.reset_optimizer = 1.0
 
-        results.loss = (
-            results.weighted_hidden_kl_per_token +
-            results.weighted_output_kl_per_token
-        )
+        else:
+            results.loss = (
+                results.weighted_hidden_kl_per_token +
+                results.weighted_output_kl_per_token
+            )
 
         if step % self.log_image_interval == 0:
             results.kl_weights = Image(
