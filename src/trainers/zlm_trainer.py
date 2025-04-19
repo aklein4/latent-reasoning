@@ -20,7 +20,7 @@ class ZLmTrainer(BaseTrainer):
         bs = input_ids.shape[0]
         target_size = target[0].numel()
 
-        noise_scale = min(1.0, step / self.noise_scale_steps)
+        noise_scale = min(1.0, step / self.noise_scale_steps) if self.noise_scale_steps is not None else 1.0
 
         # get model predictions
         model_out = model(input_ids, output_ids, target, noise_scale=noise_scale)
@@ -45,7 +45,7 @@ class ZLmTrainer(BaseTrainer):
         ).pow(2).sum(-2) / 2
 
         mean_output_kl = (
-            output - output.mean(0, keepdim=True)
+            target - target.mean(0, keepdim=True)
         ).pow(2).sum(-1)[..., None] / 2
 
         results = DotDict(
@@ -111,7 +111,7 @@ class ZLmTrainer(BaseTrainer):
             )
 
             results.mean_kl_weights = Image(
-                mean_hidden_kl.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_hidden_kl.mean(0).max().item(),
+                mean_hidden_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_hidden_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
