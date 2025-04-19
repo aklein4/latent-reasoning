@@ -22,6 +22,8 @@ class BaseTrainer:
         config: dict,
         debug: Optional[bool] = False,
         notes: Optional[str] = None,
+        resume_id: Optional[str] = None,
+        resume_step: Optional[int] = None,
     ):
         """ A trainer to train models using PyTorch.
 
@@ -47,6 +49,7 @@ class BaseTrainer:
                 name=name,
                 config=config,
                 notes=notes,
+                fork_from=f"{resume_id}?_step={resume_step}" if resume_id is not None else None,
             )
 
         # apply hyperparams

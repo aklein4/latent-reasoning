@@ -40,12 +40,23 @@ class ZLmTrainer(BaseTrainer):
             output - target
         ).pow(2).sum(-1)[..., None] / 2
 
+        mean_hidden_kl = (
+            encoder_mus - encoder_mus.mean(0, keepdim=True)
+        ).pow(2).sum(-2) / 2
+
+        mean_output_kl = (
+            output - output.mean(0, keepdim=True)
+        ).pow(2).sum(-1)[..., None] / 2
+
         results = DotDict(
             noise_scale=noise_scale,
             hidden_kl_per_token = (hidden_kl.mean(0).sum() / model.output_length),
             output_kl_per_token = (output_kl.mean(0).sum() / model.output_length),
             hidden_kl_per_channel = (hidden_kl.mean() / model.latent_size_per_layer),
             output_kl_per_channel = (output_kl.mean() / target_size),
+
+            mean_hidden_kl_per_token = (mean_hidden_kl.mean(0).sum() / model.output_length),
+            mean_output_kl_per_token = (mean_output_kl.mean(0).sum() / model.output_length),
         )
         results.total_kl_per_token = results.hidden_kl_per_token + results.output_kl_per_token
 
@@ -93,8 +104,14 @@ class ZLmTrainer(BaseTrainer):
         )
 
         if step % self.log_image_interval == 0:
+
             results.kl_weights = Image(
                 self.running_hidden_kls_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_hidden_kls_per_channel.max().item(),
+                mode='L'
+            )
+
+            results.mean_kl_weights = Image(
+                mean_hidden_kl.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_hidden_kl.mean(0).max().item(),
                 mode='L'
             )
 

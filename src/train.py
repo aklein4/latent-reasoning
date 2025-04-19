@@ -4,7 +4,7 @@ import argparse
 import torch
 
 from loaders import get_loader
-from models import CONFIG_DICT, MODEL_DICT
+from models import CONFIG_DICT, MODEL_DICT, load_checkpoint
 from trainers import TRAINER_DICT
 
 import utils.constants as constants
@@ -14,14 +14,24 @@ from utils.config_utils import load_config
 def main(args):
 
     print("Loading configs...")
-    model_config = load_config(args.model_config, kind="model")
     train_config = load_config(args.train_config, kind="train")
 
     print("Loading model...")
-    model_type = model_config.pop("model_type")
-    model_config_obj = CONFIG_DICT[model_type](**model_config)
-    model = MODEL_DICT[model_type](model_config_obj).to(constants.DEVICE)
+    assert (args.model_checkpoint is not None) ^ (args.model_config is not None), "Either model_config or model_checkpoint must be provided"
+    
+    if args.model_checkpoint is not None:
+        model = load_checkpoint(
+            args.model_checkpoint,
+        )
 
+    else:
+        model_config = load_config(args.model_config, kind="model")
+
+        model_type = model_config.pop("model_type")
+        model_config_obj = CONFIG_DICT[model_type](**model_config)
+        model = MODEL_DICT[model_type](model_config_obj)
+
+    model = model.to(constants.DEVICE)
     model.gradient_checkpointing_enable()
     
     print("Loading data...")
@@ -44,6 +54,8 @@ def main(args):
         train_config,
         debug=args.debug,
         notes=args.notes,
+        resume_id=args.resume_id,
+        resume_step=args.resume_step,
     )
 
     print("Entering trainer...")
@@ -58,10 +70,18 @@ if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument("--project", type=str, required=True)
     args.add_argument("--name", type=str, required=True)
-    args.add_argument("--model_config", type=str, required=True)
+
+    args.add_argument("--resume_id", type=str, required=False, default=None)
+    args.add_argument("--resume_step", type=int, required=False, default=None)
+
+    args.add_argument("--model_config", type=str, required=False, default=None)
+    args.add_argument("--model_checkpoint", type=str, required=False, default=None)
+
     args.add_argument("--train_config", type=str, required=True)
+
     args.add_argument("--debug", action="store_true")
     args.add_argument("--notes", type=str, default=None)
+
     args = args.parse_args()
 
     main(args)

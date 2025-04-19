@@ -81,8 +81,9 @@ class LatentShaper:
 
 class Padder:
 
-    def __init__(self, pad_length):
-        self.pad_length = pad_length
+    def __init__(self, prefix_length, suffix_length):
+        self.prefix_length = prefix_length
+        self.suffix_length = suffix_length
 
 
     def pad(self, x):
@@ -90,17 +91,25 @@ class Padder:
             [
                 torch.zeros_like(x[..., :1, :]).expand(
                     *[-1 for _ in range(x.ndim - 2)],
-                    self.pad_length,
+                    self.prefix_length,
                     -1
                 ),
                 x,
+                torch.zeros_like(x[..., :1, :]).expand(
+                    *[-1 for _ in range(x.ndim - 2)],
+                    self.suffix_length,
+                    -1
+                ),
             ],
             dim=-2
         )
 
 
     def unpad(self, x):
-        return x[..., self.pad_length:, :]
+        if self.suffix_length > 0:
+            return x[..., self.prefix_length:-self.suffix_length, :]
+        else:
+            return x[..., self.prefix_length:, :]
 
 
 class ModulatingRMSNorm(nn.Module):
@@ -209,6 +218,7 @@ class ZLmLayer(nn.Module):
         is_encoder,
         base_layer,
         prefix_length,
+        suffix_length,
         layer_idx,
         latent_layer_idx,
     ):
@@ -224,6 +234,7 @@ class ZLmLayer(nn.Module):
         self.total_latent_size = config.latent_size_per_layer * config.num_latent_layers
 
         self.prefix_length = prefix_length
+        self.suffix_length = suffix_length
         self.layer_idx = layer_idx
         self.latent_layer_idx = latent_layer_idx
 
@@ -284,13 +295,23 @@ class ZLmLayer(nn.Module):
 
         # add z to the residual stream
         y = self.z_down(z)
-        hidden_states = torch.cat(
-            [
-                hidden_states[..., :self.prefix_length, :],
-                hidden_states[..., self.prefix_length:, :] + y[..., self.prefix_length:, :],
-            ],
-            dim=-2
-        )
+        if self.suffix_length > 0:
+            hidden_states = torch.cat(
+                [
+                    hidden_states[..., :self.prefix_length, :],
+                    hidden_states[..., self.prefix_length:-self.suffix_length, :] + y[..., self.prefix_length:-self.suffix_length, :],
+                    hidden_states[..., -self.suffix_length:, :],
+                ],
+                dim=-2
+            )
+        else:
+            hidden_states = torch.cat(
+                [
+                    hidden_states[..., :self.prefix_length, :],
+                    hidden_states[..., self.prefix_length:, :] + y[..., self.prefix_length:, :],
+                ],
+                dim=-2
+            )
 
         total_noise_or_z_with_mu = total_noise_or_z.clone()
         total_noise_or_z_with_mu[..., self.latent_layer_idx] = mu
@@ -373,6 +394,9 @@ class ZLmModel(PreTrainedModel):
         self.generator_z_tokens = nn.Parameter(
             torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
+        self.generator_output_tokens = nn.Parameter(
+            torch.randn(self.target_length, self.hidden_size) * embed_std + embed_mean
+        )
 
         # create the encoder and decoder
         self.encoder = LlamaModel(base_model.model.config)
@@ -384,16 +408,18 @@ class ZLmModel(PreTrainedModel):
                 self.encoder,
                 [self.input_length, 1 + self.output_length, self.target_length, self.z_length], # +1 for sep token
                 self.input_length + 1 + self.output_length + self.target_length,
+                0,
                 True
             ),
             (
                 self.generator,
-                [self.input_length, self.z_length],
+                [self.input_length, self.z_length, self.target_length],
                 self.input_length,
+                self.target_length,
                 False
             ),
         ]
-        for transformer, strides, prefix, is_encoder in transformers_with_strides:
+        for transformer, strides, prefix, suffix, is_encoder in transformers_with_strides:
             transformer.load_state_dict({k: v.clone().detach() for k, v in base_model.model.state_dict().items()})
 
             # replace the layernorms with modulating RMSNorms
@@ -418,6 +444,7 @@ class ZLmModel(PreTrainedModel):
                         is_encoder,
                         layer,
                         prefix,
+                        suffix,
                         i,
                         latent_i
                     )
@@ -431,7 +458,7 @@ class ZLmModel(PreTrainedModel):
             transformer.latent_layers = transformer.layers[-self.num_latent_layers:]
 
             # create the padder for the transformer
-            transformer.padder = Padder(prefix)
+            transformer.padder = Padder(prefix, suffix)
 
         # create the input linears
         self.encoder_target_proj_in = nn.Linear(self.target_size, self.hidden_size, bias=False)
@@ -453,10 +480,10 @@ class ZLmModel(PreTrainedModel):
             eps=base_model.model.config.rms_norm_eps,
             elementwise_affine=True
         )
-        self.head = SoftmaxPooler(
+        self.head = nn.Linear(
             self.hidden_size,
-            config.output_head_size,
-            self.total_target_size,
+            self.target_size,
+            bias=False
         )
 
         # Initialize weights and gradient checkpointing
@@ -466,6 +493,29 @@ class ZLmModel(PreTrainedModel):
     # overwrite to prevent overwriting the base model weights
     def init_weights(self):
         return
+
+
+    def load_state_dict(self, state_dict, strict=True):
+        try:
+            super().load_state_dict(state_dict, strict=True)
+        except:
+            print("Loading from old ZLmModel state dict")
+
+        super().load_state_dict(state_dict, strict=False)
+
+        self.generator_output_tokens.data = (
+            (
+                torch.randn_like(self.generator_output_tokens.data) *
+                self.generator_z_tokens.data.std(0, keepdim=True)
+            ) + self.generator_z_tokens.data.mean(0, keepdim=True)
+        ).detach()
+
+        for m in self.generator.modules():
+            if isinstance(m, ModulatingRMSNorm):
+                m.scales[-1].data = m.scales[-2].data.clone().detach()
+                m.biases[-1].data = m.biases[-2].data.clone().detach()
+
+        self.norm.weight.data = torch.ones_like(self.norm.weight.data)
 
     
     def forward(
@@ -522,6 +572,7 @@ class ZLmModel(PreTrainedModel):
                 input_tokens,
                 expand_to_batch(self.generator_z_tokens[:1], input_tokens),
                 expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                expand_to_batch(self.generator_output_tokens, input_tokens),
             ],
             dim=-2
         )
@@ -542,8 +593,8 @@ class ZLmModel(PreTrainedModel):
         generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
 
         # get the output
-        output_states = self.norm(generator_hidden_states[..., -self.z_length:, :self.hidden_size])
-        output = self.head(output_states).view(target.shape)
+        output_states = self.norm(generator_hidden_states[..., -self.target_length:, :self.hidden_size])
+        output = self.head(output_states)
 
         return DotDict(
             encoder_mus=self.shaper.layerfy(encoder_mus),
