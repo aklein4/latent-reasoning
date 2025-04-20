@@ -573,7 +573,7 @@ class ZLmFullModel(PreTrainedModel):
         ).last_hidden_state
 
         # get the output logits
-        lm_logits = self.lm_head(decoder_hidden_states[..., -self.output_length, :])
+        lm_logits = self.lm_head(decoder_hidden_states[..., -self.output_length:, :])
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return DotDict(
