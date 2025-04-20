@@ -27,7 +27,7 @@ optimizer_kwargs:
 checkpoint_interval: 5000
 save_optimizer: false
 
-noise_scale_steps: 10000
+noise_scale_steps: null
 
 running_beta: 0.9
 
