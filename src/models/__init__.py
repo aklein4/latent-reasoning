@@ -4,6 +4,7 @@ from models.zlm import ZLmConfig, ZLmModel
 from models.gpt_zlm import GPTZLmConfig, GPTZLmModel
 from models.uncond_zlm import UncondZLmConfig, UncondZLmModel
 from models.zae import ZAEConfig, ZAEModel
+from models.zlm_full import ZLmFullConfig, ZLmFullModel
 
 
 CONFIG_DICT = {
@@ -11,6 +12,7 @@ CONFIG_DICT = {
     "gpt_zlm": GPTZLmConfig,
     "uncond_zlm": UncondZLmConfig,
     "zae": ZAEConfig,
+    "zlm_full": ZLmFullConfig,
 }
 
 
@@ -19,6 +21,7 @@ MODEL_DICT = {
     "gpt_zlm": GPTZLmModel,
     "uncond_zlm": UncondZLmModel,
     "zae": ZAEModel,
+    "zlm_full": ZLmFullModel,
 }
 
 
