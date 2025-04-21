@@ -99,8 +99,8 @@ class ZLmFullTrainer(BaseTrainer):
         
         contrastive_kl = -F.logsigmoid(
             (
-                ((negative_kl.view(bs, -1) / (1e-7 + sequence_kl_weights).view(1, -1)).sum(-1) / model.output_length) - 
-                ((kl.view(bs, -1) / (1e-7 + sequence_kl_weights).view(1, -1)).sum(-1) / model.output_length)
+                (negative_kl.view(bs, -1).sum(-1) / model.output_length) - 
+                (kl.view(bs, -1).sum(-1) / model.output_length)
             ) / self.contrastive_temp
         )
         results.contrastive_kl_loss = contrastive_kl.mean() * self.contrastive_scale

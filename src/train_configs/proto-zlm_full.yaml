@@ -23,7 +23,7 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-    grad_clip: 6.0
+    grad_clip: null
 
 checkpoint_interval: 2500
 save_optimizer: false
