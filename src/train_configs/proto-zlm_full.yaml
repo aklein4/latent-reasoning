@@ -41,8 +41,9 @@ kl_scale: 0.01
 kl_min_start: 20.0
 kl_min_steps: 5000
 
-contrastive_temp: 25
-contrastive_scale: 0.0
+contrast_temp: 10
+contrast_scale: 1.0
+contrast_steps: 5000
 
 negative_steps: 0
 # target_gap: 1.0

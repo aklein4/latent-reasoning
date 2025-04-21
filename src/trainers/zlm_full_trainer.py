@@ -110,9 +110,11 @@ class ZLmFullTrainer(BaseTrainer):
             (
                 (negative_kl.view(bs, -1).sum(-1) / model.output_length) - 
                 (kl.view(bs, -1).sum(-1) / model.output_length)
-            ) / self.contrastive_temp
+            ) / self.contrast_temp
         )
-        results.contrastive_kl_loss = contrastive_kl.mean() * self.contrastive_scale
+
+        results.contrast_scale = self.contrast_scale * (1e-7 + 1.0 - min(1.0, step / self.contrast_steps))
+        results.contrastive_kl_loss = contrastive_kl.mean() * results.contrast_scale
 
         if do_negative:
             negative_logp = torch.take_along_dim(
