@@ -104,7 +104,8 @@ class ZLmFullTrainer(BaseTrainer):
             results.gap_loss = -gap.mean()
             results.gap_loss_masked = -(gap * gap_mask).mean()
             
-            results.loss = results.loss + results.gap_loss_masked * self.gap_scale
+            results.gap_scale = self.gap_scale * (1e-7 + 1.0 - min(1.0, step / self.negative_steps))
+            results.loss = results.loss + results.gap_loss_masked * results.gap_scale
 
         if step % self.log_image_interval == 0:
 
