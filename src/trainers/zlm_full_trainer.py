@@ -14,21 +14,14 @@ class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
 
-    hooked = False
-    hooked_steps = 0
-
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.hooked = self.init_hooked
-
 
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
+        noise_scale = min(1.0, step / self.noise_warmup_steps)
+
         # get model predictions
-        model_out = model(input_ids, output_ids)
+        model_out = model(input_ids, output_ids, noise_scale=noise_scale)
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -39,19 +32,12 @@ class ZLmFullTrainer(BaseTrainer):
 
         # calculate lm metrics
         results = DotDict(
+            noise_scale = noise_scale,
+
             lm_loss = -logp.mean(),
             lm_pcorr = logp.exp().mean(),
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
-
-        # handle hook
-        if not self.hooked:
-            if results.lm_acc.item() >= self.acc_hook:
-                self.hooked = True
-                results.reset_optimizer = 1.0
-        if self.hooked:
-            self.hooked_steps += 1
-        results.hooked = 1.0 if self.hooked else 0.0
 
         # get weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
@@ -73,8 +59,6 @@ class ZLmFullTrainer(BaseTrainer):
         kl = (
             model_out.encoder_mus - model_out.generator_mus
         ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            kl = kl.detach()
 
         mean_mus = model_out.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
@@ -98,13 +82,9 @@ class ZLmFullTrainer(BaseTrainer):
         sequence_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.mean() + 1e-7)
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
 
-        results.kl_scale = self.kl_scale * (
-            min(1.0, self.hooked_steps / self.hook_warmup_steps) if self.hook_warmup_steps is not None else 1.0
-        )
-
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted * results.kl_scale
+            results.kl_per_token_weighted * self.kl_scale
         )
 
         if step % self.log_image_interval == 0:
@@ -116,6 +96,19 @@ class ZLmFullTrainer(BaseTrainer):
 
             results.mean_kl_weights = Image(
                 mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
+                mode='L'
+            )
+
+            enc_mus_to_plot = model.shaper.unlayerfy(model_out.encoder_mus).detach()
+            gen_mus_to_plot = model.shaper.unlayerfy(model_out.generator_mus).detach()
+            dists = torch.cdist(
+                gen_mus_to_plot,
+                enc_mus_to_plot,
+            ).mean(0)
+            quant = torch.quantile(dists.flatten(), 0.90, dim=-1).item()
+
+            results.mus_dists = Image(
+                np.clip(dists.cpu().numpy() / quant, 0.0, 1.0),
                 mode='L'
             )
 
