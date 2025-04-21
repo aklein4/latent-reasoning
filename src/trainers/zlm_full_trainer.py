@@ -74,6 +74,15 @@ class ZLmFullTrainer(BaseTrainer):
         results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
         results.elbo = results.lm_loss + results.kl_per_token
 
+        # kl grad scaling
+        results.kl_minimum = self.kl_min_start * (1e-6 + 1 - min(1.0, step / self.kl_min_steps))
+        results.kl_grad_scale = torch.clip((results.kl_per_token - results.kl_minimum) / results.kl_minimum, 0.0, 1.0).detach()
+        
+        kl = (
+            scale_gradient(model.encoder_mus, results.kl_grad_scale) -
+            model.generator_mus
+        ).pow(2).sum(-2) / 2
+
         # save the running metrics
         kl_per_channel_mean = (kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
 

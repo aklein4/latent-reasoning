@@ -38,8 +38,11 @@ running_beta: 0.9
 
 kl_scale: 0.01
 
+kl_min_start: 10.0
+kl_min_steps: 5000
+
 contrastive_temp: 25
-contrastive_scale: 1.0
+contrastive_scale: 0.0
 
 negative_steps: 0
 # target_gap: 1.0
