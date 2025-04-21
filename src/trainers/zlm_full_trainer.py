@@ -91,12 +91,13 @@ class ZLmFullTrainer(BaseTrainer):
         # balance the hidden kl weights
         sequence_kl_weights = self.running_kls_per_channel.pow(2) / (self.running_kls_per_channel.pow(2).mean() + 1e-7)
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
+        results.kl_per_token_weighted_fixed = results.kl_per_token_weighted * (results.kl_per_token / (1e-7 + results.kl_per_token_weighted)).detach()
 
         results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
 
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted * results.kl_scale
+            results.kl_per_token_weighted_fixed * results.kl_scale
         )
 
         if step % self.log_image_interval == 0:
