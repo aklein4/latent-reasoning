@@ -7,7 +7,7 @@ dataset:
     type: split
     kwargs: {}
 
-bs: 64
+bs: 48
 num_epochs: 1
 
 optimizer_type: adamw
