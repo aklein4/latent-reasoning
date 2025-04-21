@@ -18,6 +18,12 @@ class ZLmFullTrainer(BaseTrainer):
     hooked_steps = 0
 
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.hooked = self.init_hooked
+
+
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
@@ -92,7 +98,9 @@ class ZLmFullTrainer(BaseTrainer):
         sequence_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.mean() + 1e-7)
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
 
-        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
+        results.kl_scale = self.kl_scale * (
+            min(1.0, self.hooked_steps / self.hook_warmup_steps) if self.hook_warmup_steps is not None else 1.0
+        )
 
         results.loss = (
             results.lm_loss_scaled +
