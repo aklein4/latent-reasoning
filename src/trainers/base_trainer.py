@@ -148,6 +148,13 @@ class BaseTrainer:
 
                 results.loss.backward()
 
+                grad_norm = 0.0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = torch.linalg.vector_norm(p.grad.detach())
+                        grad_norm += param_norm.item() ** 2
+                results.grad_norm = (grad_norm ** 0.5)
+
                 if curr_step == 0:
                     with open(os.path.join(constants.LOCAL_DATA_PATH, "gradients.txt"), "w") as f:
 
@@ -160,6 +167,13 @@ class BaseTrainer:
                         for n, p in model.named_parameters():
                             if p.grad is None:
                                 f.write(f"{n}\n")
+
+                # clip the gradients
+                torch.nn.utils.clip_grads_with_norm_(
+                    model.parameters(),
+                    1.0,
+                    results.grad_norm,
+                )
 
                 # perform a single optimizer step
                 if "reset_optimizer" in results.keys():
