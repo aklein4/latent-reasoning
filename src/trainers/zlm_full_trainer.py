@@ -76,7 +76,7 @@ class ZLmFullTrainer(BaseTrainer):
 
         # kl grad scaling
         results.kl_minimum = self.kl_min_start * (1e-6 + 1 - min(1.0, step / self.kl_min_steps))
-        results.kl_grad_scale = torch.clip((results.kl_per_token - results.kl_minimum) / results.kl_minimum, 0.0, 1.0).detach()
+        results.kl_grad_scale = torch.clip((results.kl_per_token - results.kl_minimum) / results.kl_minimum, 0.0, 1.0).detach().item()
         
         kl = (
             scale_gradient(model.encoder_mus, results.kl_grad_scale) -
