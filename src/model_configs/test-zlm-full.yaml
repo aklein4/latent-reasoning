@@ -13,3 +13,5 @@ z_length: 11
 
 latent_size_per_layer: 17
 num_latent_layers: 3
+
+mu_init_scale: 1.0
