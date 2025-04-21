@@ -14,18 +14,15 @@ class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
 
+    hooked = False
+    hooked_steps = 0
+
 
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
-        do_negative = step < self.negative_steps
-
         # get model predictions
-        model_out = model(
-            input_ids,
-            output_ids,
-            do_negative=do_negative,
-        )
+        model_out = model(input_ids, output_ids)
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -36,12 +33,19 @@ class ZLmFullTrainer(BaseTrainer):
 
         # calculate lm metrics
         results = DotDict(
-            do_negative=float(do_negative),
-
             lm_loss = -logp.mean(),
             lm_pcorr = logp.exp().mean(),
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
+
+        # handle hook
+        if not self.hooked:
+            if results.lm_acc.item() >= self.acc_hook:
+                self.hooked = True
+                results.reset_optimizer = 1.0
+        if self.hooked:
+            self.hooked_steps += 1
+        results.hooked = 1.0 if self.hooked else 0.0
 
         # get weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
@@ -63,6 +67,8 @@ class ZLmFullTrainer(BaseTrainer):
         kl = (
             model_out.encoder_mus - model_out.generator_mus
         ).pow(2).sum(-2) / 2
+        if not self.hooked:
+            kl = kl.detach()
 
         mean_mus = model_out.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
@@ -74,15 +80,6 @@ class ZLmFullTrainer(BaseTrainer):
         results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
         results.elbo = results.lm_loss + results.kl_per_token
 
-        # kl grad scaling
-        # results.kl_minimum = self.kl_min_start * (1e-6 + 1 - min(1.0, step / self.kl_min_steps))
-        # results.kl_grad_scale = torch.clip((results.kl_per_token - results.kl_minimum) / results.kl_minimum, 0.0, 1.0).detach().item()
-        
-        # kl = (
-        #     scale_gradient(model_out.encoder_mus, results.kl_grad_scale) -
-        #     model_out.generator_mus
-        # ).pow(2).sum(-2) / 2
-
         # save the running metrics
         kl_per_channel_mean = (kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
 
@@ -92,47 +89,15 @@ class ZLmFullTrainer(BaseTrainer):
             self.running_kls_per_channel = self.running_kls_per_channel * self.running_beta + kl_per_channel_mean * (1 - self.running_beta)
 
         # balance the hidden kl weights
-        sequence_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.mean() + 1e-7)
+        sequence_kl_weights = self.running_kls_per_channel.pow(2) / (self.running_kls_per_channel.pow(2).mean() + 1e-7)
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
+
+        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
 
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted * self.kl_scale
+            results.kl_per_token_weighted * results.kl_scale
         )
-
-        # do contrastive loss
-        negative_kl = (
-            model_out.encoder_mus - model_out.generator_mus.flip(0)
-        ).pow(2).sum(-2) / 2
-        results.negative_kl_per_token = (negative_kl.mean(0).sum() / model.output_length)
-        
-        contrastive_kl = -F.logsigmoid(
-            (
-                (negative_kl.view(bs, -1).sum(-1) / model.output_length) - 
-                (kl.view(bs, -1).sum(-1) / model.output_length)
-            ) / self.contrast_temp
-        )
-
-        results.contrast_scale = self.contrast_scale * (1e-7 + 1.0 - min(1.0, step / self.contrast_steps))
-        results.contrastive_kl_loss = contrastive_kl.mean() * results.contrast_scale
-
-        if do_negative:
-            negative_logp = torch.take_along_dim(
-                model_out.negative_lm_logits,
-                output_ids[..., None],
-                dim=-1,
-            )[..., 0]
-
-
-            gap = logp.mean() - negative_logp.mean()
-            gap_mask = 1.0 - (gap >= self.target_gap).float()
-
-            results.gap_acc = gap_mask.mean()
-            results.gap_loss = -gap.mean()
-            results.gap_loss_masked = -(gap * gap_mask).mean()
-            
-            results.gap_scale = self.gap_scale * (1e-7 + 1.0 - min(1.0, step / self.negative_steps))
-            results.loss = results.loss + results.gap_loss_masked * results.gap_scale
 
         if step % self.log_image_interval == 0:
 

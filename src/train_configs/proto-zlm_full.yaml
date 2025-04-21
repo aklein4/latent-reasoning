@@ -23,10 +23,13 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-    grad_clip: null
+    grad_clip: 6.0
 
 checkpoint_interval: 2500
 save_optimizer: false
+
+acc_hook: 0.60
+hook_warmup_steps: 1000
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
@@ -37,16 +40,5 @@ lower_lm_bound: 0.50
 running_beta: 0.9
 
 kl_scale: 0.01
-
-kl_min_start: 20.0
-kl_min_steps: 5000
-
-contrast_temp: 10
-contrast_scale: 1.0
-contrast_steps: 5000
-
-negative_steps: 0
-# target_gap: 1.0
-# gap_scale: 10.0
 
 log_image_interval: 100
