@@ -152,8 +152,8 @@ class BaseTrainer:
                 for p in model.parameters():
                     if p.grad is not None:
                         param_norm = torch.linalg.vector_norm(p.grad.detach())
-                        grad_norm += param_norm.item() ** 2
-                results.grad_norm = (grad_norm ** 0.5)
+                        grad_norm += param_norm ** 2
+                results.grad_norm = grad_norm.sqrt()
 
                 if curr_step == 0:
                     with open(os.path.join(constants.LOCAL_DATA_PATH, "gradients.txt"), "w") as f:
