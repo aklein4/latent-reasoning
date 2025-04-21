@@ -491,6 +491,7 @@ class ZLmFullModel(PreTrainedModel):
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
         noise_scale: float = 1.0,
+        do_negative: bool = False
     ):
         
         # get the input and output tokens
@@ -567,6 +568,22 @@ class ZLmFullModel(PreTrainedModel):
             ],
             dim=-2
         )
+        if do_negative:
+            decoder_hidden_states = torch.cat(
+                [
+                    decoder_hidden_states,
+                    torch.cat(
+                        [
+                            input_tokens,
+                            expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z.flip(0)),
+                            expand_to_batch(self.decoder_start_output_token, output_tokens),
+                            output_tokens[..., :-1, :],
+                        ],
+                        dim=-2
+                    ),
+                ],
+                dim=0
+            )
 
         decoder_hidden_states = self.decoder(
             inputs_embeds=decoder_hidden_states,
@@ -576,10 +593,16 @@ class ZLmFullModel(PreTrainedModel):
         lm_logits = self.lm_head(decoder_hidden_states[..., -self.output_length:, :])
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
+        if do_negative:
+            lm_logits, negative_lm_logits = lm_logits.chunk(2, dim=0)
+        else:
+            negative_lm_logits = None
+
         return DotDict(
             encoder_mus=self.shaper.layerfy(encoder_mus),
             generator_mus=self.shaper.layerfy(generator_mus),
             lm_logits=lm_logits,
+            negative_lm_logits=negative_lm_logits,
         )
 
 

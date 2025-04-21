@@ -18,10 +18,14 @@ class ZLmFullTrainer(BaseTrainer):
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
-        noise_scale = min(1.0, step / self.noise_warmup_steps)
+        do_negative = step < self.negative_steps
 
         # get model predictions
-        model_out = model(input_ids, output_ids, noise_scale=noise_scale)
+        model_out = model(
+            input_ids,
+            output_ids,
+            do_negative=do_negative,
+        )
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -32,8 +36,6 @@ class ZLmFullTrainer(BaseTrainer):
 
         # calculate lm metrics
         results = DotDict(
-            noise_scale = noise_scale,
-
             lm_loss = -logp.mean(),
             lm_pcorr = logp.exp().mean(),
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
@@ -86,6 +88,22 @@ class ZLmFullTrainer(BaseTrainer):
             results.lm_loss_scaled +
             results.kl_per_token_weighted * self.kl_scale
         )
+
+        if do_negative:
+            negative_logp = torch.take_along_dim(
+                model_out.negative_lm_logits,
+                output_ids[..., None],
+                dim=-1,
+            )[..., 0]
+
+
+            gap = logp.mean() - negative_logp.mean()
+            gap_mask = 1.0 - (gap >= self.target_gap).float()
+
+            results.gap_acc = gap_mask.mean()
+            results.gap_loss = -(gap * gap_mask).mean()
+            
+            results = results.loss + results.gap_loss * self.gap_scale
 
         if step % self.log_image_interval == 0:
 
