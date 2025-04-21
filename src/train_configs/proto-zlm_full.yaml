@@ -7,7 +7,7 @@ dataset:
     type: split
     kwargs: {}
 
-bs: 48
+bs: 64 # 48
 num_epochs: 1
 
 optimizer_type: adamw
@@ -36,8 +36,11 @@ running_beta: 0.9
 
 kl_scale: 0.01
 
-negative_steps: 5000
-target_gap: 1.0
-gap_scale: 10.0
+contrastive_temp: 25
+contrastive_scale: 1.0
+
+negative_steps: 0
+# target_gap: 1.0
+# gap_scale: 10.0
 
 log_image_interval: 100

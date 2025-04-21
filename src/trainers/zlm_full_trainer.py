@@ -36,6 +36,8 @@ class ZLmFullTrainer(BaseTrainer):
 
         # calculate lm metrics
         results = DotDict(
+            do_negative=float(do_negative),
+
             lm_loss = -logp.mean(),
             lm_pcorr = logp.exp().mean(),
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
@@ -88,6 +90,20 @@ class ZLmFullTrainer(BaseTrainer):
             results.lm_loss_scaled +
             results.kl_per_token_weighted * self.kl_scale
         )
+
+        # do contrastive loss
+        negative_kl = (
+            model_out.encoder_mus - model_out.generator_mus.flip(0)
+        ).pow(2).sum(-2) / 2
+        results.negative_kl_per_token = (negative_kl.mean(0).sum() / model.output_length)
+        
+        contrastive_kl = -F.logsigmoid(
+            (
+                ((negative_kl.view(bs, -1) / (1e-7 + sequence_kl_weights).view(1, -1)).sum(-1) / model.output_length) - 
+                ((kl.view(bs, -1) / (1e-7 + sequence_kl_weights).view(1, -1)).sum(-1) / model.output_length)
+            ) / self.contrastive_temp
+        )
+        results.contrastive_kl_loss = contrastive_kl.mean() * self.contrastive_scale
 
         if do_negative:
             negative_logp = torch.take_along_dim(
