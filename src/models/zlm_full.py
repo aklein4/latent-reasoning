@@ -249,7 +249,7 @@ class ZLmLayer(nn.Module):
             bias=False
         )
 
-        self.mu_up.weight.data *= config.mu_init_scale
+        self.z_down.weight.data *= config.mu_init_scale
 
         self.shaper = LatentShaper(
             self.latent_size_per_layer,
@@ -291,7 +291,7 @@ class ZLmLayer(nn.Module):
             z = noise_or_z
 
         # add z to the residual stream
-        y = self.z_down(z)
+        y = self.z_down(noise_or_z if self.is_encoder else z)
         if self.suffix_length > 0:
             hidden_states = torch.cat(
                 [
