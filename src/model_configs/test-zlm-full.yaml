@@ -6,8 +6,8 @@ architectures: [
 
 base_url: TinyLlama/TinyLlama_v1.1
 
-in_length: 5
-out_length: 7
+input_length: 5
+output_length: 7
 
 z_length: 11
 

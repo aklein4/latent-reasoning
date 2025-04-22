@@ -396,10 +396,13 @@ class ZLmFullModel(PreTrainedModel):
         )
 
         # create decoder special tokens
+        self.decoder_bos_token = nn.Parameter(
+            self.embed_tokens.weight.data[base_model.config.bos_token_id].clone().detach()[None]
+        )
         self.decoder_z_tokens = nn.Parameter(
             torch.randn(self.z_length, self.hidden_size) * embed_std / np.sqrt(2) + embed_mean
         )
-        self.decoder_start_output_token = nn.Parameter(
+        self.decoder_sep_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
 
@@ -412,8 +415,8 @@ class ZLmFullModel(PreTrainedModel):
         transformers_with_strides = [
             (
                 self.encoder,
-                [self.input_length, 1 + self.output_length, self.z_length], # +1 for sep token
-                self.input_length + 1 + self.output_length,
+                [self.input_length, 1, self.output_length, self.z_length], # 1 for sep token
+                self.input_length + 1 + self.output_length, # +1 for sep token
                 0,
                 True
             ),
@@ -426,9 +429,9 @@ class ZLmFullModel(PreTrainedModel):
             ),
             (
                 self.decoder,
-                [self.input_length, self.z_length, self.output_length],
-                0,
-                0,
+                [1, self.z_length, self.input_length, 1, self.output_length-1], # 1 for sep token
+                1,
+                self.input_length + 1 + self.output_length-1, # +1 for sep token
                 None
             )
         ]
@@ -576,9 +579,10 @@ class ZLmFullModel(PreTrainedModel):
         # get the decoder input
         decoder_hidden_states = torch.cat(
             [
-                input_tokens,
+                expand_to_batch(self.decoder_bos_token, output_tokens),
                 expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z),
-                expand_to_batch(self.decoder_start_output_token, output_tokens),
+                input_tokens,
+                expand_to_batch(self.decoder_sep_token, output_tokens),
                 output_tokens[..., :-1, :],
             ],
             dim=-2
@@ -589,7 +593,14 @@ class ZLmFullModel(PreTrainedModel):
         ).last_hidden_state
 
         # get the output logits
-        lm_logits = self.lm_head(decoder_hidden_states[..., -self.output_length:, :])
+        logit_states = torch.cat(
+            [
+                decoder_hidden_states[..., -(self.input_length + 1 + (self.output_length - 1)) : -(1 + 1 + (self.output_length - 1)), :],
+                decoder_hidden_states[..., -(1 + (1 - self.output_length)):, :],
+            ],
+            dim=-2
+        )
+        lm_logits = self.lm_head(logit_states)
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return DotDict(
