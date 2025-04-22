@@ -7,6 +7,8 @@ from transformers import (
     LlamaModel, LlamaForCausalLM
 )
 
+import numpy as np
+
 from utils.dot_dict import DotDict
 from utils.model_utils import unsqueeze_to_batch, expand_to_batch, SoftmaxPooler
 import utils.constants as constants
@@ -390,12 +392,12 @@ class ZLmFullModel(PreTrainedModel):
 
         # create generator special tokens
         self.generator_z_tokens = nn.Parameter(
-            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
+            torch.randn(self.z_length, self.hidden_size) * embed_std / np.sqrt(2) + embed_mean
         )
 
         # create decoder special tokens
         self.decoder_z_tokens = nn.Parameter(
-            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
+            torch.randn(self.z_length, self.hidden_size) * embed_std / np.sqrt(2) + embed_mean
         )
         self.decoder_start_output_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
@@ -479,8 +481,8 @@ class ZLmFullModel(PreTrainedModel):
 
         # scale input layers by embedding stats
         self.encoder_noise_proj_in.weight.data *= embed_std[0][..., None]
-        self.generator_z_proj_in.weight.data *= embed_std[0][..., None]
-        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None]
+        self.generator_z_proj_in.weight.data *= embed_std[0][..., None] / (config.mu_init_scale * np.sqrt(2))
+        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None] / (config.mu_init_scale * np.sqrt(2))
 
         # fix the output norms
         self.encoder.norm = nn.Identity()
