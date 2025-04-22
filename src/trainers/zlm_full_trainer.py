@@ -93,6 +93,17 @@ class ZLmFullTrainer(BaseTrainer):
             results.kl_per_token_weighted_fixed * self.kl_scale
         )
 
+        kl_gain_per_channel = (
+            (negative_kl - kl).sum(-1)
+        ) / (model.latent_size_per_layer * model.num_latent_layers)
+
+        results.contrastive_loss = F.log_sigmoid(
+            kl_gain_per_channel / self.contrastive_temp
+        ).mean()
+
+        results.contrastive_scale = self.contrastive_scale * (1e-7 + 1 - min(1.0, step / self.contrastive_steps))
+        results.loss = results.loss + results.contrastive_loss * results.contrastive_scale
+
         if step % self.log_image_interval == 0:
 
             results.kl_weights = Image(

@@ -38,4 +38,8 @@ running_beta: 0.9
 
 kl_scale: 0.01
 
+contrastive_scale: 3
+contrastive_temp: 0.1
+contrastive_steps: 5000
+
 log_image_interval: 100
