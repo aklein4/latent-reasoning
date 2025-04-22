@@ -76,7 +76,7 @@ class ZLmFullTrainer(BaseTrainer):
         ).pow(2).sum(-2).detach() / 2
 
         negative_kl = (
-            model_out.encoder_mus - model_out.generator.flip(0)
+            model_out.encoder_mus - model_out.generator_mus.flip(0)
         ).pow(2).sum(-2).detach() / 2
 
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
