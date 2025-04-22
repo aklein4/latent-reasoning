@@ -18,7 +18,7 @@ class ZLmFullTrainer(BaseTrainer):
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
         target_ids = torch.cat(
-            [input_ids, output_ids],
+            [input_ids[:, 1:], output_ids],
             dim=-1,
         )
 
