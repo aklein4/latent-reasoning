@@ -30,6 +30,7 @@ class ZLmFullConfig(PretrainedConfig):
         latent_size_per_layer: int = 8,
         num_latent_layers: int = 10,
         mu_init_scale: float = 1.0,
+        down_init_scale: float = 1.0,
         *args,
         **kwargs
     ):
@@ -44,6 +45,7 @@ class ZLmFullConfig(PretrainedConfig):
         self.num_latent_layers = num_latent_layers
 
         self.mu_init_scale = mu_init_scale
+        self.down_init_scale = down_init_scale
 
         super().__init__(*args, **kwargs)
 
@@ -249,7 +251,10 @@ class ZLmLayer(nn.Module):
             bias=False
         )
 
-        self.z_down.weight.data *= config.mu_init_scale
+        self.mu_up.weight.data *= config.mu_init_scale
+        self.z_down.weight.data *= config.down_init_scale
+        if not self.is_encoder:
+            self.z_down.weight.data /= config.mu_init_scale
 
         self.shaper = LatentShaper(
             self.latent_size_per_layer,
