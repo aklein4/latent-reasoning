@@ -496,11 +496,15 @@ class ZLmFullModel(PreTrainedModel):
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
         noise_scale: float = 1.0,
+        warming: bool = False,
     ):
         
         # get the input and output tokens
         input_tokens = self.embed_tokens(input_ids)
         output_tokens = self.embed_tokens(output_ids)
+        if warming:
+            input_tokens = input_tokens.detach()
+            output_tokens = output_tokens.detach()
 
         # generate the noise
         noise = torch.randn(

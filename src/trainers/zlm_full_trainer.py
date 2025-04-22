@@ -14,12 +14,15 @@ class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
 
+    hooked = False
+    hooked_steps = 0
+
 
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
         # get model predictions
-        model_out = model(input_ids, output_ids)
+        model_out = model(input_ids, output_ids, warming=(not self.hooked))
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -34,6 +37,15 @@ class ZLmFullTrainer(BaseTrainer):
             lm_pcorr = logp.exp().mean(),
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
+
+        # handle hook
+        if not self.hooked:
+            if results.lm_acc.item() >= self.acc_hook:
+                self.hooked = True
+                results.reset_optimizer = 1.0
+        if self.hooked:
+            self.hooked_steps += 1
+        results.hooked = 1.0 if self.hooked else 0.0
 
         # get weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
@@ -55,15 +67,22 @@ class ZLmFullTrainer(BaseTrainer):
         kl = (
             model_out.encoder_mus - model_out.generator_mus
         ).pow(2).sum(-2) / 2
+        if not self.hooked:
+            kl = kl.detach()
 
         mean_mus = model_out.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
             model_out.encoder_mus - mean_mus
         ).pow(2).sum(-2).detach() / 2
 
+        negative_kl = (
+            model_out.encoder_mus - mean_mus.flip(0)
+        ).pow(2).sum(-2).detach() / 2
+
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
         results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
         results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
+        results.negative_kl_per_token = (negative_kl.mean(0).sum() / model.output_length)
         results.elbo = results.lm_loss + results.kl_per_token
 
         # save the running metrics
@@ -79,24 +98,12 @@ class ZLmFullTrainer(BaseTrainer):
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
         results.kl_per_token_weighted_fixed = results.kl_per_token_weighted * (results.kl_per_token / (1e-7 + results.kl_per_token_weighted)).detach()
 
+        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
+
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted_fixed * self.kl_scale
+            results.kl_per_token_weighted_fixed * results.kl_scale
         )
-
-        negative_kl = (
-            model_out.encoder_mus - model_out.generator_mus
-        ).pow(2).sum(-2) / 2
-        kl_gain_per_channel = (
-            (negative_kl - kl).sum(-1)
-        ) / (model.latent_size_per_layer * model.num_latent_layers)
-
-        results.contrastive_loss = F.log_sigmoid(
-            kl_gain_per_channel / self.contrastive_temp
-        ).mean()
-
-        results.contrastive_scale = self.contrastive_scale * (1e-7 + 1 - min(1.0, step / self.contrastive_steps))
-        results.loss = results.loss + results.contrastive_loss * results.contrastive_scale
 
         if step % self.log_image_interval == 0:
 
