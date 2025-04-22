@@ -386,19 +386,13 @@ class ZLmFullModel(PreTrainedModel):
         self.encoder_sep_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
-        self.encoder_start_z_emb = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std
-        )
-        self.encoder_z_token = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+        self.encoder_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
         # create generator special tokens
-        self.generator_start_z_emb = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std
-        )
-        self.generator_z_token = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+        self.generator_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
         # create decoder special tokens
@@ -532,8 +526,8 @@ class ZLmFullModel(PreTrainedModel):
                 input_tokens,
                 expand_to_batch(self.encoder_sep_token, input_tokens),
                 output_tokens,
-                expand_to_batch(self.encoder_z_token + self.encoder_start_z_emb, output_tokens),
-                expand_to_batch(self.encoder_z_token.repeat(self.z_length-1, 1), output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
+                expand_to_batch(self.encoder_z_tokens[:1], output_tokens),
+                expand_to_batch(self.encoder_z_tokens[1:], output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
             ],
             dim=-2
         )
@@ -558,8 +552,8 @@ class ZLmFullModel(PreTrainedModel):
         generator_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.generator_z_token + self.generator_start_z_emb, input_tokens),
-                expand_to_batch(self.generator_z_token.repeat(self.z_length-1, 1), input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                expand_to_batch(self.generator_z_tokens[:1], input_tokens),
+                expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
             ],
             dim=-2
         )
