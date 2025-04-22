@@ -596,7 +596,7 @@ class ZLmFullModel(PreTrainedModel):
         logit_states = torch.cat(
             [
                 decoder_hidden_states[..., -(self.input_length + 1 + (self.output_length - 1)) : -(1 + 1 + (self.output_length - 1)), :],
-                decoder_hidden_states[..., -(1 + (1 - self.output_length)):, :],
+                decoder_hidden_states[..., -(1 + (self.output_length - 1)):, :],
             ],
             dim=-2
         )
