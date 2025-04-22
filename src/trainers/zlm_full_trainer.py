@@ -14,9 +14,6 @@ class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
 
-    hooked = False
-    hooked_steps = 0
-
 
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
@@ -38,15 +35,6 @@ class ZLmFullTrainer(BaseTrainer):
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
 
-        # handle hook
-        if not self.hooked:
-            if results.lm_acc.item() >= self.acc_hook:
-                self.hooked = True
-                results.reset_optimizer = 1.0
-        if self.hooked:
-            self.hooked_steps += 1
-        results.hooked = 1.0 if self.hooked else 0.0
-
         # get weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
             (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
@@ -64,14 +52,9 @@ class ZLmFullTrainer(BaseTrainer):
         results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
 
         # calculate kl metrics
-        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
-
         kl = (
-            scale_gradient(model_out.encoder_mus, results.kl_scale) -
-            model_out.generator_mus
+            model_out.encoder_mus - model_out.generator_mus
         ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            kl = kl.detach()
 
         mean_mus = model_out.encoder_mus.mean(0, keepdim=True)
         mean_kl = (
@@ -98,8 +81,22 @@ class ZLmFullTrainer(BaseTrainer):
 
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted_fixed
+            results.kl_per_token_weighted_fixed * self.kl_scale
         )
+
+        negative_kl = (
+            model_out.encoder_mus - model_out.generator_mus
+        ).pow(2).sum(-2) / 2
+        kl_gain_per_channel = (
+            (negative_kl - kl).sum(-1)
+        ) / (model.latent_size_per_layer * model.num_latent_layers)
+
+        results.contrastive_loss = F.log_sigmoid(
+            kl_gain_per_channel / self.contrastive_temp
+        ).mean()
+
+        results.contrastive_scale = self.contrastive_scale * (1e-7 + 1 - min(1.0, step / self.contrastive_steps))
+        results.loss = results.loss + results.contrastive_loss * results.contrastive_scale
 
         if step % self.log_image_interval == 0:
 
