@@ -62,7 +62,7 @@ class LatentShaper:
 
 
     def layerfy(self, x):
-        assert x.shape[-1] == self.total_latent_size, f"Expected last dimension to be {self.latent_size}, but got {x.shape[-1]}"
+        assert x.shape[-1] == self.total_latent_size, f"Expected last dimension to be {self.total_latent_size}, but got {x.shape[-1]}"
         return x.view(
             *x.shape[:-1],
             self.latent_size_per_layer,
@@ -263,6 +263,9 @@ class ZLmLayer(nn.Module):
             self.num_latent_layers
         )
 
+        self.sample_mode = False
+        self.down_mask = None
+
 
     def forward(
         self,
@@ -290,7 +293,7 @@ class ZLmLayer(nn.Module):
         )
 
         # get z
-        if self.is_encoder:
+        if self.is_encoder or self.sample_mode:
             # noise_or_z should be noise
             z = noise_or_z + mu
         else:
@@ -299,23 +302,28 @@ class ZLmLayer(nn.Module):
 
         # add z to the residual stream
         y = self.z_down(noise_or_z if self.is_encoder else z)
-        if self.suffix_length > 0:
-            hidden_states = torch.cat(
-                [
-                    hidden_states[..., :self.prefix_length, :],
-                    hidden_states[..., self.prefix_length:-self.suffix_length, :] + y[..., self.prefix_length:-self.suffix_length, :],
-                    hidden_states[..., -self.suffix_length:, :],
-                ],
-                dim=-2
-            )
+        
+        if self.down_mask is not None:
+            hidden_states = hidden_states + y * self.down_mask[None, ..., None]
+
         else:
-            hidden_states = torch.cat(
-                [
-                    hidden_states[..., :self.prefix_length, :],
-                    hidden_states[..., self.prefix_length:, :] + y[..., self.prefix_length:, :],
-                ],
-                dim=-2
-            )
+            if self.suffix_length > 0:
+                hidden_states = torch.cat(
+                    [
+                        hidden_states[..., :self.prefix_length, :],
+                        hidden_states[..., self.prefix_length:-self.suffix_length, :] + y[..., self.prefix_length:-self.suffix_length, :],
+                        hidden_states[..., -self.suffix_length:, :],
+                    ],
+                    dim=-2
+                )
+            else:
+                hidden_states = torch.cat(
+                    [
+                        hidden_states[..., :self.prefix_length, :],
+                        hidden_states[..., self.prefix_length:, :] + y[..., self.prefix_length:, :],
+                    ],
+                    dim=-2
+                )
 
         total_noise_or_z_with_mu = total_noise_or_z.clone()
         total_noise_or_z_with_mu[..., self.latent_layer_idx] = mu
@@ -609,6 +617,18 @@ class ZLmFullModel(PreTrainedModel):
             if isinstance(m, ModulatingRMSNorm):
                 m.dropout = dropout
 
+    
+    def _set_sample_mode(self, mode):
+        for m in self.modules():
+            if isinstance(m, ZLmLayer):
+                m.sample_mode = mode
+    
+    def _set_down_mask(self, mask):
+        # TODO: seperate this so it doesn' affect the encoder
+        for m in self.modules():
+            if isinstance(m, ZLmLayer):
+                m.down_mask = mask
+
 
     def sample_noise(
         self, 
@@ -621,7 +641,7 @@ class ZLmFullModel(PreTrainedModel):
         return torch.randn(
             *input_ids.shape[:-1],
             self.z_length,
-            self.latent_size,
+            self.total_latent_size,
         ).to(input_tokens)
 
 
@@ -637,52 +657,84 @@ class ZLmFullModel(PreTrainedModel):
 
         # get the input tokens
         input_tokens = self.embed_tokens(input_ids)
-        z_tokens = expand_to_batch(self.decoder_z_tokens, input_tokens)
 
         # generate the noise
         if noise is None:
-            noise = torch.randn(
-                *input_ids.shape[:-1],
-                self.z_length,
-                self.latent_size,
-            ).to(input_tokens) * temperature
+            noise = self.sample_noise(input_ids)
+        noise = noise * temperature
+
+        """ Generator """
 
         # initialize the cache
         cache = DynamicCache()
 
-        # pass the input tokens through the decoder
+        # pass the input tokens through the generator
         self._set_norm_index(0)
-        cache = self.decoder(
-            inputs_embeds=input_tokens,
+        self._set_sample_mode(True)
+        self._set_down_mask(torch.zeros_like(input_tokens[0, :, 0]))
+
+        input_embeds = torch.cat(
+            [
+                input_tokens,
+                expand_to_batch(torch.zeros_like(noise[0, 0, :]), input_tokens),
+            ],
+            dim=-1
+        )
+        cache = self.generator(
+            inputs_embeds=input_embeds,
             use_cache=True,
             past_key_values=cache,
         ).past_key_values        
 
-        # pass the noise through the decoder
-        mus = []
+        # pass the noise through the generator
+        zs = []
         z_prev = torch.zeros_like(noise[..., :1, :])
+        z_tokens = expand_to_batch(self.generator_z_tokens, input_tokens)
+
         self._set_norm_index(1)
+        self._set_down_mask(torch.ones_like(z_prev[0, :, 0]))
+
         for i in tqdm(range(self.z_length), desc="Sampling z tokens"):
 
-            outputs = self.decoder(
-                inputs_embeds=(z_tokens[..., i:i+1, :] + self.decoder_z_proj_in(z_prev)),
+            input_embeds = torch.cat(
+                [
+                    z_tokens[..., i:i+1, :] + self.generator_z_proj_in(z_prev),
+                    noise[..., i:i+1, :],
+                ],
+                dim=-1
+            )
+
+            outputs = self.generator(
+                inputs_embeds=input_embeds,
                 use_cache=True,
                 past_key_values=cache,
             )
 
-            mu = self.decoder_mu_proj_out(
-                self.z_norm(outputs.last_hidden_state)
-            )
+            z_prev = outputs.last_hidden_state[..., self.hidden_size:]
+            zs.append(z_prev)
 
-            mus.append(mu)
-
-            z_prev = noise[..., i:i+1, :] + mu
             cache = outputs.past_key_values
 
-        mus = torch.cat(mus[:-1], dim=-2)
+        z = torch.cat(zs, dim=-2)
+        mu = z - noise
 
-        # sample the output tokens
-        self._set_norm_index(2)
+        """ Decoder """
+
+        cache = DynamicCache()
+
+        # pass the input tokens and z through the decoder
+        input_embeds = torch.cat(
+            [
+                input_tokens,
+                expand_to_batch(self.decoder_z_token.repeat(self.z_length, 1), input_tokens) + self.decoder_z_proj_in(z),
+            ],
+            dim=-2
+        )
+        cache = self.decoder(
+            inputs_embeds=input_embeds,
+            use_cache=True,
+            past_key_values=cache,
+        ).past_key_values
 
         prev_token = expand_to_batch(self.decoder_start_output_token, input_tokens)
         output_tokens = []
@@ -694,7 +746,7 @@ class ZLmFullModel(PreTrainedModel):
                 past_key_values=cache,
             )
 
-            logits = self.lm_head(self.lm_norm(outputs.last_hidden_state))
+            logits = self.lm_head(outputs.last_hidden_state)
             ind = logits.argmax(-1)
 
             output_tokens.append(ind)
@@ -706,7 +758,8 @@ class ZLmFullModel(PreTrainedModel):
 
         return DotDict(
             tokens=output_tokens,
-            mus=mus,
+            z=z,
+            mu=mu
         )
 
 
