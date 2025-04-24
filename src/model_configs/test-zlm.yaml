@@ -11,4 +11,10 @@ out_length: 7
 
 z_length: 11
 
-latent_size: 53
+latent_size_per_layer: 17
+num_latent_layers: 3
+
+target_length: 13
+target_size: 23
+
+output_head_size: 29
