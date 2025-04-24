@@ -13,6 +13,7 @@ from utils.dot_dict import DotDict
 class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
+    running_zero_kls_per_channel = None
 
     hooked = False
     hooked_steps = 0
@@ -47,6 +48,38 @@ class ZLmFullTrainer(BaseTrainer):
             self.hooked_steps += 1
         results.hooked = 1.0 if self.hooked else 0.0
 
+        # calculate kl metrics
+        kl = (
+            model_out.encoder_mus - model_out.generator_mus
+        ).pow(2).sum(-2) / 2
+        if not self.hooked:
+            kl = kl.detach()
+
+        zero_kl = (
+            model_out.encoder_mus
+        ).pow(2).sum(-2).detach() / 2
+        if not self.hooked:
+            zero_kl = zero_kl.detach()
+
+        results.kl_per_token = (kl.mean(0).sum() / model.output_length)
+        results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
+        
+        results.zero_kl_per_token = (zero_kl.mean(0).sum() / model.output_length)
+        results.zero_kl_per_channel = (zero_kl.mean() / model.latent_size_per_layer)
+        
+        results.elbo = results.lm_loss + results.kl_per_token
+
+        # save the running metrics
+        kl_per_channel_mean = (kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
+        zero_kl_per_channel_mean = (zero_kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
+
+        if self.running_kls_per_channel is None:
+            self.running_kls_per_channel = kl_per_channel_mean
+            self.running_zero_kls_per_channel = zero_kl_per_channel_mean
+        else:
+            self.running_kls_per_channel = self.running_kls_per_channel * self.running_beta + kl_per_channel_mean * (1 - self.running_beta)
+            self.running_zero_kls_per_channel = self.running_zero_kls_per_channel * self.running_beta + zero_kl_per_channel_mean * (1 - self.running_beta)
+
         # get weighted lm loss
         results.lm_scale = 1e-7 + 1 - torch.clip(
             (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
@@ -63,46 +96,26 @@ class ZLmFullTrainer(BaseTrainer):
 
         results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
 
-        # calculate kl metrics
-        kl = (
-            model_out.encoder_mus - model_out.generator_mus
-        ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            kl = kl.detach()
-
-        mean_mus = model_out.encoder_mus.mean(0, keepdim=True)
-        mean_kl = (
-            model_out.encoder_mus - mean_mus
-        ).pow(2).sum(-2).detach() / 2
-
-        negative_kl = (
-            model_out.encoder_mus - model_out.generator_mus.flip(0)
-        ).pow(2).sum(-2).detach() / 2
-
-        results.kl_per_token = (kl.mean(0).sum() / model.output_length)
-        results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
-        results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
-        results.negative_kl_per_token = (negative_kl.mean(0).sum() / model.output_length)
-        results.elbo = results.lm_loss + results.kl_per_token
-
-        # save the running metrics
-        kl_per_channel_mean = (kl.mean(0) / model.latent_size_per_layer).detach().clone().float()
-
-        if self.running_kls_per_channel is None:
-            self.running_kls_per_channel = kl_per_channel_mean
-        else:
-            self.running_kls_per_channel = self.running_kls_per_channel * self.running_beta + kl_per_channel_mean * (1 - self.running_beta)
-
         # balance the hidden kl weights
         sequence_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.mean() + 1e-7)
         results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
         results.kl_per_token_weighted_fixed = results.kl_per_token_weighted * (results.kl_per_token / (1e-7 + results.kl_per_token_weighted)).detach()
 
+        zero_sequence_kl_weights = self.running_zero_kls_per_channel / (self.running_zero_kls_per_channel.mean() + 1e-7)
+        results.zero_kl_per_token_weighted = (zero_kl.mean(0) * zero_sequence_kl_weights).sum() / model.output_length
+        results.zero_kl_per_token_weighted_fixed = results.zero_kl_per_token_weighted * (results.zero_kl_per_token / (1e-7 + results.zero_kl_per_token_weighted)).detach()
+
         results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
+        results.kl_balance = min(1.0, self.hooked_steps / self.zero_warmup_steps)
+
+        results.kl_loss = (
+            (1e-7 + 1 - results.kl_balance) * results.zero_kl_per_token_weighted_fixed +
+            results.kl_balance * results.kl_per_token_weighted_fixed
+        )
 
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_per_token_weighted_fixed * results.kl_scale
+            results.kl_loss * results.kl_scale
         )
 
         if step % self.log_image_interval == 0:
@@ -112,8 +125,8 @@ class ZLmFullTrainer(BaseTrainer):
                 mode='L'
             )
 
-            results.mean_kl_weights = Image(
-                mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
+            results.zero_kl_weights = Image(
+                zero_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 

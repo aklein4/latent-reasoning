@@ -557,29 +557,33 @@ class ZLmFullModel(PreTrainedModel):
         z = noise + encoder_mus
 
         # get the generator input
-        generator_hidden_states = torch.cat(
-            [
-                input_tokens,
-                expand_to_batch(self.generator_z_tokens[:1], input_tokens),
-                expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
-            ],
-            dim=-2
-        )
-        generator_hidden_states = torch.cat(
-            [
-                generator_hidden_states,
-                self.generator.padder.pad(z)
-            ],
-            dim=-1
-        )
+        if warming:
+            generator_mus = torch.zeros_like(encoder_mus)
 
-        # pass through the generator
-        generator_hidden_states = self.generator(
-            inputs_embeds=generator_hidden_states,
-        ).last_hidden_state
+        else:
+            generator_hidden_states = torch.cat(
+                [
+                    input_tokens,
+                    expand_to_batch(self.generator_z_tokens[:1], input_tokens),
+                    expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                ],
+                dim=-2
+            )
+            generator_hidden_states = torch.cat(
+                [
+                    generator_hidden_states,
+                    self.generator.padder.pad(z)
+                ],
+                dim=-1
+            )
 
-        # get the flattened generator mus
-        generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
+            # pass through the generator
+            generator_hidden_states = self.generator(
+                inputs_embeds=generator_hidden_states,
+            ).last_hidden_state
+
+            # get the flattened generator mus
+            generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
 
         # get the decoder input
         decoder_hidden_states = torch.cat(

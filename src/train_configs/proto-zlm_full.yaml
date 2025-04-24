@@ -29,7 +29,6 @@ checkpoint_interval: 2500
 save_optimizer: false
 
 acc_hook: 0.75
-hook_warmup_steps: 1000
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
@@ -38,6 +37,9 @@ upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
 running_beta: 0.9
+
+hook_warmup_steps: 1000
+zero_warmup_steps: 5000
 
 kl_scale: 0.01
 
