@@ -64,8 +64,6 @@ class ZLmFullTrainer(BaseTrainer):
         mean_kl = (
             model_out.encoder_mus - model_out.encoder_mus.mean(0, keepdim=True)
         ).pow(2).sum(-2).detach() / 2
-        if not self.hooked:
-            mean_kl = mean_kl.detach()
 
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
         results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
@@ -135,7 +133,12 @@ class ZLmFullTrainer(BaseTrainer):
             )
 
             results.zero_kl_weights = Image(
-                zero_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).detach().max().item(),
+                self.running_zero_kls_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_zero_kls_per_channel.max().item(),
+                mode='L'
+            )
+
+            results.mean_kl_weights = Image(
+                mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
