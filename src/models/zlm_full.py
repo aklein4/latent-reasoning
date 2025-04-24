@@ -254,9 +254,9 @@ class ZLmLayer(nn.Module):
         )
 
         if self.is_encoder:
-            self.mu_up.weight.data *= config.small_init_scale
-        else:
             self.mu_up.weight.data *= config.mu_init_scale
+        else:
+            self.mu_up.weight.data *= config.small_init_scale
         self.z_down.weight.data *= config.small_init_scale
 
         self.shaper = LatentShaper(
