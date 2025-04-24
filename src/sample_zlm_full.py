@@ -11,7 +11,7 @@ import utils.constants as constants
 import matplotlib.pyplot as plt
 
 
-CHECKPOINT = 'local_data/proto-zlm_zlm-full-repeat-decoder/000000020000'
+CHECKPOINT = 'local_data/proto-zlm_zlm-full-repeat-decoder/000000032500'
 
 
 def slerp(val, low, high):
@@ -54,22 +54,16 @@ def main():
     tokens = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
     assert tokens.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
 
-    double = torch.cat([tokens, tokens], dim=0)
-    noise = model.sample_noise(double)
+    # double = torch.cat([tokens, tokens], dim=0)
+    # noise = model.sample_noise(double)
     # noise = torch.cat([noise, noise], dim=0)
 
     output = model.sample(
-        double,
-        noise=noise,
+        tokens,
+        # noise=None
+        temperature=0.0,
     )
 
-    kl = (
-        output.mu[0] - output.mu[1]
-    ).pow(2).sum(-1) / 2
-
-    plt.plot(
-        kl.detach().cpu().numpy(),
-    )
     plt.savefig("kl.png")
 
     with open("output.txt", "w") as f:
