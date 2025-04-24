@@ -61,12 +61,21 @@ class ZLmFullTrainer(BaseTrainer):
         if not self.hooked:
             zero_kl = zero_kl.detach()
 
+        mean_kl = (
+            model_out.encoder_mus - model_out.encoder_mus.mean(0, keepdim=True)
+        ).pow(2).sum(-2).detach() / 2
+        if not self.hooked:
+            mean_kl = mean_kl.detach()
+
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
         results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
         
         results.zero_kl_per_token = (zero_kl.mean(0).sum() / model.output_length)
         results.zero_kl_per_channel = (zero_kl.mean() / model.latent_size_per_layer)
         
+        results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
+        results.mean_kl_per_channel = (mean_kl.mean() / model.latent_size_per_layer)
+
         results.elbo = results.lm_loss + results.kl_per_token
 
         # save the running metrics
