@@ -32,7 +32,7 @@ class ZLmFullConfig(PretrainedConfig):
         latent_size_per_layer: int = 8,
         num_latent_layers: int = 10,
         mu_init_scale: float = 1.0,
-        down_init_scale: float = 1.0,
+        small_init_scale: float = 1.0,
         *args,
         **kwargs
     ):
@@ -47,7 +47,7 @@ class ZLmFullConfig(PretrainedConfig):
         self.num_latent_layers = num_latent_layers
 
         self.mu_init_scale = mu_init_scale
-        self.down_init_scale = down_init_scale
+        self.small_init_scale = small_init_scale
 
         super().__init__(*args, **kwargs)
 
@@ -245,7 +245,7 @@ class ZLmLayer(nn.Module):
         self.mu_up = nn.Linear(
             self.hidden_size,
             self.latent_size_per_layer,
-            bias=False
+            bias=(not self.is_encoder)
         )
         self.z_down = nn.Linear(
             self.latent_size_per_layer,
@@ -253,10 +253,11 @@ class ZLmLayer(nn.Module):
             bias=False
         )
 
-        self.mu_up.weight.data *= config.mu_init_scale
-        self.z_down.weight.data *= config.down_init_scale
-        if not self.is_encoder:
-            self.z_down.weight.data /= config.mu_init_scale
+        if self.is_encoder:
+            self.mu_up.weight.data *= config.small_init_scale
+        else:
+            self.mu_up.weight.data *= config.mu_init_scale
+        self.z_down.weight.data *= config.small_init_scale
 
         self.shaper = LatentShaper(
             self.latent_size_per_layer,
@@ -399,8 +400,11 @@ class ZLmFullModel(PreTrainedModel):
         )
 
         # create generator special tokens
-        self.generator_z_tokens = nn.Parameter(
-            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
+        self.generator_no_z_embed = nn.Parameter(
+            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+        )
+        self.generator_z_token = nn.Parameter(
+            torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
 
         # create decoder special tokens
@@ -564,8 +568,8 @@ class ZLmFullModel(PreTrainedModel):
             generator_hidden_states = torch.cat(
                 [
                     input_tokens,
-                    expand_to_batch(self.generator_z_tokens[:1], input_tokens),
-                    expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                    expand_to_batch(self.generator_z_token + self.generator_no_z_embed, input_tokens),
+                    expand_to_batch(self.generator_z_token.repeat(self.z_length-1, 1), input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
                 ],
                 dim=-2
             )
