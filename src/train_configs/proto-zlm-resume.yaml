@@ -2,7 +2,7 @@ trainer_type: zlm
 
 dataset:
     name: fineweb-100BT-split-128
-    branch: split-2
+    branch: split-2.5
 
     type: zae
     kwargs:

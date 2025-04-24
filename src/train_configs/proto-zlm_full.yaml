@@ -1,14 +1,13 @@
-trainer_type: zlm
+trainer_type: zlm_full
 
 dataset:
     name: fineweb-100BT-split-128
-    branch: split-2
+    branch: main
 
-    type: zae
-    kwargs:
-        checkpoint_path: local_data/proto-zlm_zae-beta/000000030000
+    type: split
+    kwargs: {}
 
-bs: 64
+bs: 64 # 48
 num_epochs: 1
 
 optimizer_type: adamw
@@ -24,11 +23,22 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-checkpoint_interval: 5000
+    grad_clip: 6.0
+
+checkpoint_interval: 2500
 save_optimizer: false
 
-noise_scale_steps: null
+acc_hook: 0.75
+hook_warmup_steps: 1000
+
+upper_acc_bound: 0.99
+lower_acc_bound: 0.98
+
+upper_lm_bound: 0.75
+lower_lm_bound: 0.50
 
 running_beta: 0.9
+
+kl_scale: 0.01
 
 log_image_interval: 100

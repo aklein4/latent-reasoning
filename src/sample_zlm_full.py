@@ -5,15 +5,13 @@ import numpy as np
 
 from transformers import AutoTokenizer
 
-from models.zlm import ZLmConfig, ZLmModel
-from utils.config_utils import load_config
+from models import load_checkpoint
 import utils.constants as constants
 
 import matplotlib.pyplot as plt
 
 
-MODEL_CONFIG = 'proto-zlm'
-CHECKPOINT = 'proto-zlm_beta/000000014000/checkpoint.ckpt'
+CHECKPOINT = 'local_data/proto-zlm_zlm-full-repeat-decoder/000000020000'
 
 
 def slerp(val, low, high):
@@ -40,17 +38,11 @@ def main():
 
 
     print("loading model...")
-    config = load_config(MODEL_CONFIG, "model")
-    model = ZLmModel(ZLmConfig(**config), cpu=True)
+    model = load_checkpoint(
+        CHECKPOINT,
+        cpu=True,
+    )
     print("Model loaded!")
-
-    print("loading checkpoint...")
-    state_dict = torch.load(
-        os.path.join(constants.LOCAL_DATA_PATH, CHECKPOINT),
-        map_location='cpu'
-    )['model']
-    model.load_state_dict(state_dict, strict=True)
-    print("Checkpoint loaded!")
 
     print("loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -62,32 +54,31 @@ def main():
     tokens = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
     assert tokens.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
 
-    prompt_2 = """The European hedgehog (Erinaceus europaeus), also known as the West European hedgehog or common hedgehog, is a hedgehog species native to Europe from Iberia and Italy northwards into Scandinavia and westwards into the British Isles.[3] It is a generally common and widely distributed species that can survive across a wide range of habitat types. It is a well-known species, and a favourite in European gardens, both for its endearing appearance and its preference for eating a range of garden pests. While populations are currently stable across much of its range, it is declining severely in Great Britain[2] where it is now Red Listed,[4] meaning that it is considered to be at risk of local extinction. Outside its native range, the species was introduced to New Zealand during the late nineteenth and early twentieth centuries."""
-    tokens_2 = tokenizer(prompt_2, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
-    assert tokens_2.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
-
-    tokens = torch.cat([tokens, tokens_2], dim=0)
-    noise = model.sample_noise(tokens)
+    double = torch.cat([tokens, tokens], dim=0)
+    noise = model.sample_noise(double)
+    # noise = torch.cat([noise, noise], dim=0)
 
     output = model.sample(
-        tokens,
-        temperature=1.0,
-        # guidance_scale=3.0,
-        # dropout_level=0.05
+        double,
         noise=noise,
-    ).mus
+    )
 
-    dists = (output[0][None]- output[1][:, None]).pow(2).mean(-1)
+    kl = (
+        output.mu[0] - output.mu[1]
+    ).pow(2).sum(-1) / 2
 
-    plt.matshow(dists.detach().cpu().numpy())
-    plt.colorbar()
+    plt.plot(
+        kl.detach().cpu().numpy(),
+    )
+    plt.savefig("kl.png")
 
-    plt.title("Distance between two samples")
-    plt.xlabel("Token index")
-    plt.ylabel("Token index")
+    with open("output.txt", "w") as f:
 
-    plt.tight_layout()
-    plt.savefig("distances.png")
+        f.write("\n === INPUT === \n\n")
+        f.write(tokenizer.decode(tokens[0], skip_special_tokens=False))
+
+        f.write("\n\n === OUTPUT === \n\n")
+        f.write(tokenizer.decode(output.tokens[0], skip_special_tokens=True))
 
 
 if __name__ == '__main__':
