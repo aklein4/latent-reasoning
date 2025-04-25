@@ -399,7 +399,7 @@ class ZLmFullModel(PreTrainedModel):
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
         self.encoder_no_z_embed = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+            torch.zeros(1, self.hidden_size) * embed_std + embed_mean
         )
         self.encoder_z_position_tokens = nn.Parameter(
             torch.zeros(self.z_length - 1, self.hidden_size) * embed_std + embed_mean
@@ -410,7 +410,7 @@ class ZLmFullModel(PreTrainedModel):
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
         self.generator_no_z_embed = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+            torch.zeros(1, self.hidden_size) * embed_std + embed_mean
         )
         self.generator_z_position_tokens = nn.Parameter(
             torch.zeros(self.z_length - 1, self.hidden_size)
