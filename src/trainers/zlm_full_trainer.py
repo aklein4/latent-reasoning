@@ -109,12 +109,23 @@ class ZLmFullTrainer(BaseTrainer):
         results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
 
         # balance the hidden kl weights
-        sequence_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.mean() + 1e-7)
-        results.kl_per_token_weighted = (kl.mean(0) * sequence_kl_weights).sum() / model.output_length
+        normalized_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.max() + 1e-7)
+        kl_clipped = torch.where(
+            normalized_kl_weights > self.kl_weight_threshold,
+            kl.mean(0),
+            kl.mean(0).detach(),
+        )
+        results.kl_per_token_weighted = (kl_clipped * normalized_kl_weights).sum() / model.output_length
         results.kl_per_token_weighted_fixed = results.kl_per_token_weighted * (results.kl_per_token / (1e-7 + results.kl_per_token_weighted)).detach()
 
-        mean_sequence_kl_weights = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.mean() + 1e-7)
-        results.mean_kl_per_token_weighted = (mean_kl.mean(0) * mean_sequence_kl_weights).sum() / model.output_length
+        # balance the mean kl weights
+        normalized_mean_kl_weights = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.max() + 1e-7)
+        mean_kl_clipped = torch.where(
+            normalized_mean_kl_weights > self.kl_weight_threshold,
+            mean_kl.mean(0),
+            mean_kl.mean(0).detach(),
+        )
+        results.mean_kl_per_token_weighted = (mean_kl_clipped * normalized_mean_kl_weights).sum() / model.output_length
         results.mean_kl_per_token_weighted_fixed = results.mean_kl_per_token_weighted * (results.mean_kl_per_token / (1e-7 + results.mean_kl_per_token_weighted)).detach()
 
         results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
@@ -129,6 +140,13 @@ class ZLmFullTrainer(BaseTrainer):
             results.lm_loss_scaled +
             results.kl_loss * results.kl_scale
         )
+
+        # get the latnet usage
+        p_kl = self.running_kls_per_channel / (self.running_kls_per_channel.sum() + 1e-7)
+        results.effective_parties = (1 / (p_kl ** 2).sum().item()) / p_kl.numel()
+
+        p_mean_kl = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.sum() + 1e-7)
+        results.effective_parties_mean = (1 / (p_mean_kl ** 2).sum().item()) / p_mean_kl.numel()
 
         if step % self.log_image_interval == 0:
 
