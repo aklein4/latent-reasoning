@@ -41,8 +41,6 @@ running_beta: 0.9
 hook_warmup_steps: 1000
 mean_warmup_steps: 5000
 
-kl_weight_threshold: 0.1
-
 kl_scale: 0.1
 
 log_image_interval: 100
