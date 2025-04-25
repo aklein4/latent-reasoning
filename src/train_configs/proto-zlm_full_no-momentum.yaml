@@ -1,0 +1,46 @@
+trainer_type: zlm_full
+
+dataset:
+    name: fineweb-100BT-split-128
+    branch: main
+
+    type: split
+    kwargs: {}
+
+bs: 64
+num_epochs: 1
+
+optimizer_type: adamw
+optimizer_kwargs:
+
+    num_warmup_steps: 1000
+    num_training_steps: 50000
+
+    lr: 0.00005
+    final_lr: 0.000005
+
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.01
+
+    grad_clip: 6.0
+
+checkpoint_interval: 2500
+save_optimizer: false
+
+acc_hook: 0.75
+
+upper_acc_bound: 0.99
+lower_acc_bound: 0.98
+
+upper_lm_bound: 0.75
+lower_lm_bound: 0.50
+
+running_beta: 0.0
+
+hook_warmup_steps: 1000
+mean_warmup_steps: 5000
+
+kl_scale: 0.1
+
+log_image_interval: 100

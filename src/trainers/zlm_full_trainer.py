@@ -19,6 +19,13 @@ class ZLmFullTrainer(BaseTrainer):
     hooked_steps = 0
 
 
+    def __init___(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.hooked = self.init_hooked
+        self.hooked_steps = self.init_hooked_steps
+
+
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
@@ -45,7 +52,7 @@ class ZLmFullTrainer(BaseTrainer):
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
-                mean_mus = model_out.encoder_mus.mean(0).mean(1)
+                mean_mus = model_out.encoder_mus.mean(0).mean(0)
                 for i, layer in enumerate(model.generator.latent_layers):
                     layer.mu_up.bias.data = mean_mus[..., i].clone().detach()
 

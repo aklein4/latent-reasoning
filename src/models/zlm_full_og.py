@@ -395,21 +395,15 @@ class ZLmFullModel(PreTrainedModel):
         self.encoder_sep_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
-        self.encoder_z_token = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
-        )
-        self.encoder_no_z_embed = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
-        )
-        self.encoder_z_position_tokens = nn.Parameter(
-            torch.zeros(self.z_length - 1, self.hidden_size) * embed_std + embed_mean
+        self.encoder_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
         # create generator special tokens
-        self.generator_z_token = nn.Parameter(
+        self.generator_no_z_embed = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
-        self.generator_no_z_embed = nn.Parameter(
+        self.generator_z_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
         self.generator_z_position_tokens = nn.Parameter(
@@ -550,8 +544,8 @@ class ZLmFullModel(PreTrainedModel):
                 input_tokens,
                 expand_to_batch(self.encoder_sep_token, input_tokens),
                 output_tokens,
-                expand_to_batch(self.encoder_z_token + self.encoder_no_z_embed, output_tokens),
-                expand_to_batch(self.encoder_z_token + self.encoder_z_position_tokens, output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
+                expand_to_batch(self.encoder_z_tokens[:1], output_tokens),
+                expand_to_batch(self.encoder_z_tokens[1:], output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
             ],
             dim=-2
         )
@@ -581,7 +575,10 @@ class ZLmFullModel(PreTrainedModel):
                 [
                     input_tokens,
                     expand_to_batch(self.generator_z_token + self.generator_no_z_embed, input_tokens),
-                    expand_to_batch(self.generator_z_token + self.generator_z_position_tokens, input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                    expand_to_batch(
+                        self.generator_z_token.repeat(self.z_length-1, 1) + self.generator_z_position_tokens,
+                        input_tokens
+                    ) + self.generator_z_proj_in(z[..., :-1, :]),
                 ],
                 dim=-2
             )
@@ -605,7 +602,10 @@ class ZLmFullModel(PreTrainedModel):
         decoder_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.decoder_z_token + self.decoder_z_position_tokens, output_tokens) + self.decoder_z_proj_in(z),
+                expand_to_batch(
+                    self.decoder_z_token.repeat(self.z_length, 1) + self.decoder_z_position_tokens,
+                    output_tokens
+                ) + self.decoder_z_proj_in(z),
                 expand_to_batch(self.decoder_start_output_token, output_tokens),
                 output_tokens[..., :-1, :],
             ],
