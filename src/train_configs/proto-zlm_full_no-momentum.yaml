@@ -41,7 +41,7 @@ running_beta: 0.0
 hook_warmup_steps: 1000
 mean_warmup_steps: 5000
 
-kl_weight_threshold: 0.1
+kl_weight_threshold: 0.25
 
 kl_scale: 0.1
 

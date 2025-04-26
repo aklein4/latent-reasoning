@@ -110,13 +110,20 @@ class ZLmFullTrainer(BaseTrainer):
 
         # balance the hidden kl weights
         normalized_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.max() + 1e-7)
-        kl_clipped = torch.where(
+        clipped_kl_weights = torch.where(
             normalized_kl_weights > self.kl_weight_threshold,
-            kl.mean(0),
-            kl.mean(0).detach(),
+            normalized_kl_weights,
+            0.0,
         )
-        results.kl_per_token_weighted = (kl_clipped * normalized_kl_weights).sum() / model.output_length
-        results.kl_per_token_weighted_fixed = results.kl_per_token_weighted * (results.kl_per_token / (1e-7 + results.kl_per_token_weighted)).detach()
+        kl_val_per_token = (kl.mean(0) * clipped_kl_weights).sum() / model.output_length
+        kl_val_multiplier = results.kl_per_token / (1e-7 + kl_val_per_token)
+        final_kl_weights = clipped_kl_weights * kl_val_multiplier.detach().item()
+
+        kl_to_loss = (
+            scale_gradient(model_out.encoder_mus, final_kl_weights[None].detach()) -
+            model_out.generator_mus
+        ).pow(2).sum(-2) / 2
+        results.kl_per_token_weighted = kl_to_loss.mean(0).sum() / model.output_length
 
         # balance the mean kl weights
         normalized_mean_kl_weights = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.max() + 1e-7)
@@ -133,7 +140,7 @@ class ZLmFullTrainer(BaseTrainer):
 
         results.kl_loss = (
             (1e-7 + 1 - results.kl_balance) * results.mean_kl_per_token_weighted_fixed +
-            results.kl_balance * results.kl_per_token_weighted_fixed
+            results.kl_balance * results.kl_per_token_weighted
         )
 
         results.loss = (
@@ -157,6 +164,16 @@ class ZLmFullTrainer(BaseTrainer):
 
             results.mean_kl_weights = Image(
                 mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
+                mode='L'
+            )
+
+            results.kl_mask = Image(
+                (normalized_kl_weights > self.kl_weight_threshold).float().detach().xcpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
+                mode='L'
+            )
+
+            results.mean_kl_mask = Image(
+                (normalized_mean_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
                 mode='L'
             )
 
