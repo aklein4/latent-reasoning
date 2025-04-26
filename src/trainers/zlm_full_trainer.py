@@ -168,7 +168,7 @@ class ZLmFullTrainer(BaseTrainer):
             )
 
             results.kl_mask = Image(
-                (normalized_kl_weights > self.kl_weight_threshold).float().detach().xcpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
+                (normalized_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
                 mode='L'
             )
 
