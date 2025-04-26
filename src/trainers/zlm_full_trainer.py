@@ -120,7 +120,7 @@ class ZLmFullTrainer(BaseTrainer):
         final_kl_weights = clipped_kl_weights * kl_val_multiplier.detach().item()
 
         kl_to_loss = (
-            scale_gradient(model_out.encoder_mus, final_kl_weights[None].detach()) -
+            scale_gradient(model_out.encoder_mus, final_kl_weights[None, :, None, :].detach()) -
             model_out.generator_mus
         ).pow(2).sum(-2) / 2
         results.kl_per_token_weighted = kl_to_loss.mean(0).sum() / model.output_length
