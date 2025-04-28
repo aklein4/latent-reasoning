@@ -245,7 +245,7 @@ class ZLmLayer(nn.Module):
         self.mu_up = nn.Linear(
             self.hidden_size,
             self.latent_size_per_layer,
-            bias=(not self.is_encoder)
+            bias=False
         )
         self.z_down = nn.Linear(
             self.latent_size_per_layer,
@@ -513,6 +513,11 @@ class ZLmFullModel(PreTrainedModel):
         self.generator.norm = nn.Identity()
         # decoder norm is fine
 
+        # bias for the generator to estimate the mu
+        self.generator_mu_bias = nn.Parameter(
+            torch.zeros(self.z_length, self.total_latent_size)
+        )
+
         # Initialize weights and gradient checkpointing
         self.post_init()
     
@@ -600,6 +605,8 @@ class ZLmFullModel(PreTrainedModel):
 
             # get the flattened generator mus
             generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
+
+            generator_mus = generator_mus + expand_to_batch(self.generator_mu_bias, generator_mus)
 
         # get the decoder input
         decoder_hidden_states = torch.cat(

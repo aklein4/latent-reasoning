@@ -18,6 +18,8 @@ class ZLmFullTrainer(BaseTrainer):
     hooked = False
     hooked_steps = 0
 
+    use_generator = False
+
 
     def __init___(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -25,12 +27,14 @@ class ZLmFullTrainer(BaseTrainer):
         self.hooked = self.init_hooked
         self.hooked_steps = self.init_hooked_steps
 
+        self.use_generator = self.init_use_generator
+
 
     def train_step(self, step, model, input_ids, output_ids):
         bs = input_ids.shape[0]
 
         # get model predictions
-        model_out = model(input_ids, output_ids, warming=(not self.hooked))
+        model_out = model(input_ids, output_ids, warming=(not self.use_generator))
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -52,26 +56,30 @@ class ZLmFullTrainer(BaseTrainer):
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
-                mean_mus = model_out.encoder_mus.mean(0).mean(0)
-                for i, layer in enumerate(model.generator.latent_layers):
-                    layer.mu_up.bias.data = mean_mus[..., i].clone().detach()
-
         if self.hooked:
             self.hooked_steps += 1
         results.hooked = 1.0 if self.hooked else 0.0
+
+        # handle use_generator
+        if not self.use_generator:
+            if self.hooked_steps >= self.mean_warmup_steps:
+                self.use_generator = True
+                results.reset_optimizer = 1.0
+
+                model.generator_mu_bias.data = model.shaper.unlayerfy(
+                    model_out.encoder_mus
+                ).mean(0).clone().detach()
+
+        results.use_generator = 1.0 if self.use_generator else 0.0
 
         # calculate kl metrics
         kl = (
             model_out.encoder_mus - model_out.generator_mus
         ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            kl = kl.detach()
 
         mean_kl = (
             model_out.encoder_mus - model_out.encoder_mus.mean(0, keepdim=True)
         ).pow(2).sum(-2) / 2
-        if not self.hooked:
-            mean_kl = mean_kl.detach()
 
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
         results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
@@ -135,13 +143,11 @@ class ZLmFullTrainer(BaseTrainer):
         results.mean_kl_per_token_weighted = (mean_kl_clipped * normalized_mean_kl_weights).sum() / model.output_length
         results.mean_kl_per_token_weighted_fixed = results.mean_kl_per_token_weighted * (results.mean_kl_per_token / (1e-7 + results.mean_kl_per_token_weighted)).detach()
 
-        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
-        results.kl_balance = min(1.0, self.hooked_steps / self.mean_warmup_steps)
+        results.kl_loss = results.mean_kl_per_token_weighted_fixed if not self.use_generator else results.kl_per_token_weighted
+        if not self.hooked:
+            results.kl_loss = results.kl_loss.detach()
 
-        results.kl_loss = (
-            (1e-7 + 1 - results.kl_balance) * results.mean_kl_per_token_weighted_fixed +
-            results.kl_balance * results.kl_per_token_weighted
-        )
+        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
 
         results.loss = (
             results.lm_loss_scaled +
