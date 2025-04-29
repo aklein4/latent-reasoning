@@ -16,3 +16,5 @@ num_latent_layers: 16
 
 mu_init_scale: 1.0
 small_init_scale: 0.01
+
+z_beta: 0.9

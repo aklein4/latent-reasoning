@@ -2,6 +2,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+
+
+def momentum_scan(x, beta):
+    x_curr = torch.zeros_like(x[:, :1])
+    x_accum = []
+        
+    for i in range(x.shape[1]):
+
+        x_curr = (
+            beta * x_curr
+            + (1 - beta) * x[:, i:i+1]
+        )
+        x_accum.append(x_curr.clone())
+
+    return torch.cat(x_accum, dim=1)
+
 
 class _ScaleGradient(torch.autograd.Function):
 

@@ -10,7 +10,7 @@ from transformers import (
 import numpy as np
 
 from utils.dot_dict import DotDict
-from utils.model_utils import unsqueeze_to_batch, expand_to_batch, SoftmaxPooler
+from utils.model_utils import unsqueeze_to_batch, expand_to_batch, momentum_scan
 import utils.constants as constants
 
 
@@ -33,6 +33,7 @@ class ZLmFullConfig(PretrainedConfig):
         num_latent_layers: int = 10,
         mu_init_scale: float = 1.0,
         small_init_scale: float = 1.0,
+        z_beta: float = 0.9,
         *args,
         **kwargs
     ):
@@ -48,6 +49,8 @@ class ZLmFullConfig(PretrainedConfig):
 
         self.mu_init_scale = mu_init_scale
         self.small_init_scale = small_init_scale
+
+        self.z_beta = z_beta
 
         super().__init__(*args, **kwargs)
 
@@ -365,6 +368,8 @@ class ZLmFullModel(PreTrainedModel):
             self.num_latent_layers
         )
 
+        self.z_beta = config.z_beta
+
         # get base model
         base_model = LlamaForCausalLM.from_pretrained(
             config.base_url,
@@ -406,8 +411,8 @@ class ZLmFullModel(PreTrainedModel):
         )
 
         # create decoder special tokens
-        self.decoder_z_token = nn.Parameter(
-            torch.randn(1, self.hidden_size) * embed_std + embed_mean
+        self.decoder_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
         self.decoder_start_output_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
@@ -486,11 +491,13 @@ class ZLmFullModel(PreTrainedModel):
 
         # create the input linears
         self.encoder_noise_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
+        self.encoder_noise_proj_in_scan = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
         self.generator_z_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
         self.decoder_z_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
 
         # scale input layers by embedding stats
         self.encoder_noise_proj_in.weight.data *= embed_std[0][..., None]
+        self.encoder_noise_proj_in_scan.weight.data *= embed_std[0][..., None]
         self.generator_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
         self.decoder_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
 
@@ -534,6 +541,7 @@ class ZLmFullModel(PreTrainedModel):
             self.z_length,
             self.total_latent_size,
         ).to(input_tokens) * noise_scale
+        noise_scan = momentum_scan(noise, self.z_beta)
 
         # get the encoder input
         encoder_hidden_states = torch.cat(
@@ -542,7 +550,7 @@ class ZLmFullModel(PreTrainedModel):
                 expand_to_batch(self.encoder_sep_token, input_tokens),
                 output_tokens,
                 expand_to_batch(self.encoder_z_tokens[:1], output_tokens),
-                expand_to_batch(self.encoder_z_tokens[1:], output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]),
+                expand_to_batch(self.encoder_z_tokens[1:], output_tokens) + self.encoder_noise_proj_in(noise[..., :-1, :]) + self.encoder_noise_proj_in_scan(noise_scan[..., :-1, :]),
             ],
             dim=-2
         )
@@ -562,6 +570,7 @@ class ZLmFullModel(PreTrainedModel):
         # get flattened mus and z
         encoder_mus = self.encoder.padder.unpad(encoder_hidden_states[..., self.hidden_size:])
         z = noise + encoder_mus
+        z_scan = momentum_scan(z, self.z_beta)
 
         # get the generator input
         if warming:
@@ -572,7 +581,7 @@ class ZLmFullModel(PreTrainedModel):
                 [
                     input_tokens,
                     expand_to_batch(self.generator_z_tokens[:1], input_tokens),
-                    expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                    expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z_scan[..., :-1, :]),
                 ],
                 dim=-2
             )
@@ -598,7 +607,7 @@ class ZLmFullModel(PreTrainedModel):
         decoder_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.decoder_z_token, output_tokens) + self.decoder_z_proj_in(z),
+                expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z_scan),
                 expand_to_batch(self.decoder_start_output_token, output_tokens),
                 output_tokens[..., :-1, :],
             ],
@@ -617,6 +626,8 @@ class ZLmFullModel(PreTrainedModel):
             encoder_mus=self.shaper.layerfy(encoder_mus),
             generator_mus=self.shaper.layerfy(generator_mus),
             lm_logits=lm_logits,
+            z=z,
+            z_scan=z_scan,
         )
 
 

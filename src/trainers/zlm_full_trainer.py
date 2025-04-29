@@ -161,7 +161,7 @@ class ZLmFullTrainer(BaseTrainer):
             )
 
             results.mean_kl_weights = Image(
-                mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
+                self.running_mean_kls_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_mean_kls_per_channel.max().item(),
                 mode='L'
             )
 
@@ -195,6 +195,16 @@ class ZLmFullTrainer(BaseTrainer):
             sim_quant = torch.quantile(sims.flatten(), 0.90, dim=-1).item()
             results.mu_sims = Image(
                 np.clip(sims.cpu().numpy() / sim_quant, 0.0, 1.0),
+                mode='L'
+            )
+
+            z_sims = torch.cdist(
+                model_out.z_scan.detach(),
+                model_out.z_scan.detach(),
+            ).mean(0)
+            z_sim_quant = torch.quantile(z_sims.flatten(), 0.90, dim=-1).item()
+            results.z_sims = Image(
+                np.clip(z_sims.cpu().numpy() / z_sim_quant, 0.0, 1.0),
                 mode='L'
             )
 
