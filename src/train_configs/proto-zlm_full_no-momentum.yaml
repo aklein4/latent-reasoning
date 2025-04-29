@@ -23,19 +23,15 @@ optimizer_kwargs:
     eps: 0.00000001
     weight_decay: 0.01
 
-    grad_clip: 6.0
+    grad_clip: 3.0
 
 checkpoint_interval: 2500
 save_optimizer: false
 
 init_hooked: false
 init_hooked_steps: 0
-init_use_generator: false
 
 acc_hook: 0.75
-
-hook_warmup_steps: 1000
-mean_warmup_steps: 5000
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
@@ -46,6 +42,9 @@ lower_lm_bound: 0.50
 running_beta: 0.0
 
 kl_weight_threshold: 0.25
+
+hook_warmup_steps: 1000
+mean_warmup_steps: 5000
 
 kl_scale: 0.1
 

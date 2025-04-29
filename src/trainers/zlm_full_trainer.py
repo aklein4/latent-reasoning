@@ -18,8 +18,6 @@ class ZLmFullTrainer(BaseTrainer):
     hooked = False
     hooked_steps = 0
 
-    use_generator = False
-
 
     def __init___(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -27,14 +25,11 @@ class ZLmFullTrainer(BaseTrainer):
         self.hooked = self.init_hooked
         self.hooked_steps = self.init_hooked_steps
 
-        self.use_generator = self.init_use_generator
-
 
     def train_step(self, step, model, input_ids, output_ids):
-        bs = input_ids.shape[0]
 
         # get model predictions
-        model_out = model(input_ids, output_ids, warming=(not self.use_generator))
+        model_out = model(input_ids, output_ids, warming=(not self.hooked))
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -50,27 +45,34 @@ class ZLmFullTrainer(BaseTrainer):
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
 
+        results.lm_scale = 1e-7 + 1 - torch.clip(
+            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
+            min=0.0,
+            max=1.0,
+        ).detach()
+
+        lm_mask = 1e-7 + 1 - torch.clip(
+            (logp - np.log(self.lower_lm_bound)) / (np.log(self.upper_lm_bound) - np.log(self.lower_lm_bound)),
+            min=0.0,
+            max=1.0,
+        ).detach()
+        results.lm_mask = lm_mask.mean()
+
+        results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
+
         # handle hook
         if not self.hooked:
             if results.lm_acc.item() >= self.acc_hook:
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
+                # model.generator_mu_bias.data = model.shaper.unlayerfy(
+                #     model_out.encoder_mus
+                # ).mean(0).clone().detach()
+
         if self.hooked:
             self.hooked_steps += 1
         results.hooked = 1.0 if self.hooked else 0.0
-
-        # handle use_generator
-        if not self.use_generator:
-            if self.hooked_steps >= self.mean_warmup_steps:
-                self.use_generator = True
-                results.reset_optimizer = 1.0
-
-                model.generator_mu_bias.data = model.shaper.unlayerfy(
-                    model_out.encoder_mus
-                ).mean(0).clone().detach()
-
-        results.use_generator = 1.0 if self.use_generator else 0.0
 
         # calculate kl metrics
         kl = (
@@ -100,22 +102,6 @@ class ZLmFullTrainer(BaseTrainer):
             self.running_kls_per_channel = self.running_kls_per_channel * self.running_beta + kl_per_channel_mean * (1 - self.running_beta)
             self.running_mean_kls_per_channel = self.running_mean_kls_per_channel * self.running_beta + mean_kl_per_channel_mean * (1 - self.running_beta)
 
-        # get weighted lm loss
-        results.lm_scale = 1e-7 + 1 - torch.clip(
-            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
-            min=0.0,
-            max=1.0,
-        ).detach()
-
-        lm_mask = 1e-7 + 1 - torch.clip(
-            (logp - np.log(self.lower_lm_bound)) / (np.log(self.upper_lm_bound) - np.log(self.lower_lm_bound)),
-            min=0.0,
-            max=1.0,
-        ).detach()
-        results.lm_mask = lm_mask.mean()
-
-        results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
-
         # balance the hidden kl weights
         normalized_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.max() + 1e-7)
         clipped_kl_weights = torch.where(
@@ -135,19 +121,25 @@ class ZLmFullTrainer(BaseTrainer):
 
         # balance the mean kl weights
         normalized_mean_kl_weights = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.max() + 1e-7)
-        mean_kl_clipped = torch.where(
+        clipped_mean_kl_weights = torch.where(
             normalized_mean_kl_weights > self.kl_weight_threshold,
-            mean_kl.mean(0),
-            mean_kl.mean(0).detach(),
+            normalized_mean_kl_weights,
+            0.0,
         )
-        results.mean_kl_per_token_weighted = (mean_kl_clipped * normalized_mean_kl_weights).sum() / model.output_length
-        results.mean_kl_per_token_weighted_fixed = results.mean_kl_per_token_weighted * (results.mean_kl_per_token / (1e-7 + results.mean_kl_per_token_weighted)).detach()
+        mean_kl_val_per_token = (mean_kl.mean(0) * clipped_mean_kl_weights).sum() / model.output_length
+        mean_kl_val_multiplier = results.mean_kl_per_token / (1e-7 + mean_kl_val_per_token)
+        final_mean_kl_weights = clipped_mean_kl_weights * mean_kl_val_multiplier.detach().item()
 
-        results.kl_loss = results.mean_kl_per_token_weighted_fixed if not self.use_generator else results.kl_per_token_weighted
-        if not self.hooked:
-            results.kl_loss = results.kl_loss.detach()
+        mean_kl_to_loss = mean_kl * final_mean_kl_weights[None].detach()
+        results.mean_kl_per_token_weighted = mean_kl_to_loss.mean(0).sum() / model.output_length
 
         results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
+        results.kl_balance = min(1.0, self.hooked_steps / self.mean_warmup_steps)
+
+        results.kl_loss = (
+            (1e-7 + 1 - results.kl_balance) * results.mean_kl_per_token_weighted_fixed +
+            results.kl_balance * results.kl_per_token_weighted
+        )
 
         results.loss = (
             results.lm_loss_scaled +
