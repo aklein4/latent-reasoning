@@ -406,8 +406,8 @@ class ZLmFullModel(PreTrainedModel):
         )
 
         # create decoder special tokens
-        self.decoder_z_tokens = nn.Parameter(
-            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
+        self.decoder_z_token = nn.Parameter(
+            torch.randn(1, self.hidden_size) * embed_std + embed_mean
         )
         self.decoder_start_output_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
@@ -598,7 +598,7 @@ class ZLmFullModel(PreTrainedModel):
         decoder_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z),
+                expand_to_batch(self.decoder_z_token, output_tokens) + self.decoder_z_proj_in(z),
                 expand_to_batch(self.decoder_start_output_token, output_tokens),
                 output_tokens[..., :-1, :],
             ],

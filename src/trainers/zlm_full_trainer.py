@@ -177,16 +177,27 @@ class ZLmFullTrainer(BaseTrainer):
 
             enc_mus_to_plot = model.shaper.unlayerfy(model_out.encoder_mus).detach()
             gen_mus_to_plot = model.shaper.unlayerfy(model_out.generator_mus).detach()
+
             dists = torch.cdist(
                 gen_mus_to_plot,
                 enc_mus_to_plot,
             ).mean(0)
             quant = torch.quantile(dists.flatten(), 0.90, dim=-1).item()
-
-            results.mus_dists = Image(
+            results.mu_dists = Image(
                 np.clip(dists.cpu().numpy() / quant, 0.0, 1.0),
                 mode='L'
             )
+
+            sims = torch.cdist(
+                enc_mus_to_plot,
+                enc_mus_to_plot,
+            ).mean(0)
+            sim_quant = torch.quantile(sims.flatten(), 0.90, dim=-1).item()
+            results.mu_sims = Image(
+                np.clip(sims.cpu().numpy() / sim_quant, 0.0, 1.0),
+                mode='L'
+            )
+
 
         return results
     
