@@ -137,7 +137,7 @@ class ZLmFullTrainer(BaseTrainer):
         results.kl_balance = min(1.0, self.hooked_steps / self.mean_warmup_steps)
 
         results.kl_loss = (
-            (1e-7 + 1 - results.kl_balance) * results.mean_kl_per_token_weighted_fixed +
+            (1e-7 + 1 - results.kl_balance) * results.mean_kl_per_token_weighted +
             results.kl_balance * results.kl_per_token_weighted
         )
 
