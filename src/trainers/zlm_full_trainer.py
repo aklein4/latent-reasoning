@@ -165,15 +165,15 @@ class ZLmFullTrainer(BaseTrainer):
                 mode='L'
             )
 
-            results.kl_mask = Image(
-                (normalized_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
-                mode='L'
-            )
+            # results.kl_mask = Image(
+            #     (normalized_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
+            #     mode='L'
+            # )
 
-            results.mean_kl_mask = Image(
-                (normalized_mean_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
-                mode='L'
-            )
+            # results.mean_kl_mask = Image(
+            #     (normalized_mean_kl_weights > self.kl_weight_threshold).float().detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T,
+            #     mode='L'
+            # )
 
             enc_mus_to_plot = model.shaper.unlayerfy(model_out.encoder_mus).detach()
             gen_mus_to_plot = model.shaper.unlayerfy(model_out.generator_mus).detach()
