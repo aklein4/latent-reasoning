@@ -92,10 +92,13 @@ class ZLmContrastTrainer(BaseTrainer):
         results.contrast_scale = self.contrast_scale * (1e-7 + 1 - min(
             1.0, step / self.contrast_steps
         ))
+        results.kl_scale = self.kl_scale * min(
+            1.0, step / self.contrast_steps
+        )
 
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_loss * self.kl_scale +
+            results.kl_loss * results.kl_scale +
             results.contrast_loss * results.contrast_scale
         )
 
@@ -109,17 +112,17 @@ class ZLmContrastTrainer(BaseTrainer):
         if step % self.log_image_interval == 0:
 
             results.kl_weights = Image(
-                mean_kl.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.max().item(),
+                mean_kl.cpu().detach().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.max().item(),
                 mode='L'
             )
 
             results.kl_weights_control = Image(
-                kl_control.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / kl_control.mean(0).max().item(),
+                kl_control.mean(0).cpu().detach().numpy().reshape(model.z_length, model.num_latent_layers).T / kl_control.mean(0).max().item(),
                 mode='L'
             )
 
             results.kl_mask = Image(
-                final_kl_weights.detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / final_kl_weights.max().item(),
+                final_kl_weights.cpu().detach().numpy().reshape(model.z_length, model.num_latent_layers).T / final_kl_weights.max().item(),
                 mode='L'
             )
 
@@ -132,7 +135,7 @@ class ZLmContrastTrainer(BaseTrainer):
             ).mean(0)
             quant = torch.quantile(dists.flatten(), 0.90, dim=-1).item()
             results.mu_dists = Image(
-                np.clip(dists.cpu().numpy() / quant, 0.0, 1.0),
+                np.clip(dists.cpu().detach().numpy() / quant, 0.0, 1.0),
                 mode='L'
             )
 
@@ -142,7 +145,7 @@ class ZLmContrastTrainer(BaseTrainer):
             ).mean(0)
             sim_quant = torch.quantile(sims.flatten(), 0.90, dim=-1).item()
             results.mu_sims = Image(
-                np.clip(sims.cpu().numpy() / sim_quant, 0.0, 1.0),
+                np.clip(sims.cpu().detach().numpy() / sim_quant, 0.0, 1.0),
                 mode='L'
             )
 

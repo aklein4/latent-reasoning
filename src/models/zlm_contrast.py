@@ -383,7 +383,7 @@ class ZLmContrastModel(PreTrainedModel):
 
         # create encoder special tokens
         self.encoder_bos_token = nn.Parameter(
-            self.embed_tokens.weight.data[config.bos_token_id].clone().detach()[None]
+            self.embed_tokens.weight.data[base_model.model.config.bos_token_id].clone().detach()[None]
         )
         self.encoder_z_tokens = nn.Parameter(
             torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
@@ -395,6 +395,9 @@ class ZLmContrastModel(PreTrainedModel):
         )
 
         # create decoder special tokens
+        self.decoder_bos_token = nn.Parameter(
+            self.embed_tokens.weight.data[base_model.model.config.bos_token_id].clone().detach()[None]
+        )
         self.decoder_z_tokens = nn.Parameter(
             torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
@@ -425,7 +428,7 @@ class ZLmContrastModel(PreTrainedModel):
             ),
             (
                 self.decoder,
-                [self.input_length, self.z_length, self.output_length],
+                [1, self.z_length, self.output_length],
                 0,
                 0,
                 None
@@ -478,8 +481,8 @@ class ZLmContrastModel(PreTrainedModel):
         self.decoder_z_proj_in = nn.Linear(self.total_latent_size, self.hidden_size, bias=False)
 
         # scale input layers by embedding stats
-        self.generator_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
-        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
+        self.generator_z_proj_in.weight.data *= embed_std[0][..., None]
+        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None]
 
         # fix the output norms
         self.encoder.norm.weight.data = torch.ones_like(self.encoder.norm.weight.data)
@@ -540,10 +543,10 @@ class ZLmContrastModel(PreTrainedModel):
         encoder_mus = self.encoder_mu_proj_out(encoder_hidden_states)
         encoder_mus = self.shaper.unlayerfy(
             F.rms_norm(
-                self.shaper.layerfy(encoder_mus),
+                self.shaper.layerfy(encoder_mus).swapaxes(-1, -2),
                 normalized_shape=[self.latent_size_per_layer],
                 eps=self.encoder.norm.variance_epsilon,
-            )
+            ).swapaxes(-1, -2)
         )
 
         z = noise + encoder_mus
@@ -580,7 +583,7 @@ class ZLmContrastModel(PreTrainedModel):
         # get the decoder input
         decoder_hidden_states = torch.cat(
             [
-                input_tokens,
+                expand_to_batch(self.decoder_bos_token, output_tokens),
                 expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z),
                 expand_to_batch(self.decoder_start_output_token, output_tokens),
                 output_tokens[..., :-1, :],
