@@ -553,7 +553,7 @@ class ZLmContrastModel(PreTrainedModel):
 
         # get the generator input
         if disable_generator:
-            generator_mus = torch.zeros_like(encoder_mus)
+            generator_mus = torch.ones_like(encoder_mus)
 
         else:
             generator_hidden_states = torch.cat(
