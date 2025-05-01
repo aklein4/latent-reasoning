@@ -1,0 +1,42 @@
+trainer_type: zlm_contrast
+
+dataset:
+    name: fineweb-100BT-split-128
+    branch: main
+
+    type: split
+    kwargs: {}
+
+bs: 64
+num_epochs: 1
+
+optimizer_type: adamw
+optimizer_kwargs:
+
+    num_warmup_steps: 1000
+    num_training_steps: 50000
+
+    lr: 0.00005
+    final_lr: 0.000005
+
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.01
+
+    grad_clip: 3.0
+
+checkpoint_interval: 2500
+save_optimizer: false
+
+upper_lm_bound: 0.75
+lower_lm_bound: 0.50
+
+contrast_temperature: 5.0
+contrast_steps: 10000
+
+kl_weight_threshold: 0.25
+
+kl_scale: 0.1
+contrast_scale: 0.25
+
+log_image_interval: 100
