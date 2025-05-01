@@ -14,7 +14,7 @@ class ZLmFullTrainer(BaseTrainer):
     
     running_kls_per_channel = None
     running_mean_kls_per_channel = None
-    running_zeros_per_channel = None
+    running_zero_kl_per_channel = None
 
     hooked = False
     hooked_steps = 0
@@ -107,11 +107,11 @@ class ZLmFullTrainer(BaseTrainer):
         if self.running_kls_per_channel is None:
             self.running_kls_per_channel = kl_per_channel_mean
             self.running_mean_kls_per_channel = mean_kl_per_channel_mean
-            self.running_zeros_per_channel = zero_kl_per_channel_mean
+            self.running_zero_kl_per_channel = zero_kl_per_channel_mean
         else:
             self.running_kls_per_channel = self.running_kls_per_channel * self.running_beta + kl_per_channel_mean * (1 - self.running_beta)
             self.running_mean_kls_per_channel = self.running_mean_kls_per_channel * self.running_beta + mean_kl_per_channel_mean * (1 - self.running_beta)
-            self.running_zeros_per_channel = self.running_zeros_per_channel * self.running_beta + zero_kl_per_channel_mean * (1 - self.running_beta)
+            self.running_zero_kl_per_channel = self.running_zero_kl_per_channel * self.running_beta + zero_kl_per_channel_mean * (1 - self.running_beta)
 
         # balance the kl weights
         normalized_kl_weights = self.running_kls_per_channel / (self.running_kls_per_channel.max() + 1e-7)
@@ -133,7 +133,7 @@ class ZLmFullTrainer(BaseTrainer):
         results.kl_per_token_weighted = kl_to_loss.mean(0).sum() / model.output_length
 
         # balance the zero kl weights
-        normalized_zero_kl_weights = self.running_zeros_per_channel / (self.running_zeros_per_channel.max() + 1e-7)
+        normalized_zero_kl_weights = self.running_zero_kl_per_channel / (self.running_zero_kl_per_channel.max() + 1e-7)
         clipped_zero_kl_weights = torch.clip(
             normalized_zero_kl_weights - self.kl_weight_threshold,
             min=0.0,
@@ -167,7 +167,7 @@ class ZLmFullTrainer(BaseTrainer):
         p_mean_kl = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.sum() + 1e-7)
         results.effective_parties_mean = (1 / (p_mean_kl ** 2).sum().item()) / p_mean_kl.numel()
 
-        p_zero_kl = self.running_zeros_per_channel / (self.running_zeros_per_channel.sum() + 1e-7)
+        p_zero_kl = self.running_zero_kl_per_channel / (self.running_zero_kl_per_channel.sum() + 1e-7)
         results.effective_parties_zero = (1 / (p_zero_kl ** 2).sum().item()) / p_zero_kl.numel()
 
         if step % self.log_image_interval == 0:
@@ -179,6 +179,11 @@ class ZLmFullTrainer(BaseTrainer):
 
             results.mean_kl_weights = Image(
                 self.running_mean_kls_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_mean_kls_per_channel.max().item(),
+                mode='L'
+            )
+
+            results.zero_kl_weights = Image(
+                self.running_zero_kl_per_channel.cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / self.running_zero_kl_per_channel.max().item(),
                 mode='L'
             )
 
