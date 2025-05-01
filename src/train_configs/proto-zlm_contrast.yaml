@@ -28,6 +28,9 @@ optimizer_kwargs:
 checkpoint_interval: 2500
 save_optimizer: false
 
+acc_hook: 0.75
+hook_warmup_steps: 1000
+
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 

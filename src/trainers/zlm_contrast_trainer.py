@@ -13,10 +13,21 @@ from utils.dot_dict import DotDict
 
 class ZLmContrastTrainer(BaseTrainer):
     
+    hooked = False
+    hooked_steps = 0
+
+
+    def __init___(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.hooked = self.init_hooked
+        self.hooked_steps = self.init_hooked_steps
+
+
     def train_step(self, step, model, input_ids, output_ids):
 
         # get model predictions
-        model_out = model(input_ids, output_ids)
+        model_out = model(input_ids, output_ids, disable_generator=(not self.hooked))
 
         # extract probabilities
         logp = torch.take_along_dim(
@@ -40,6 +51,15 @@ class ZLmContrastTrainer(BaseTrainer):
         results.lm_mask = lm_mask.mean()
 
         results.lm_loss_scaled = -(logp * lm_mask).mean()
+
+        # handle hook
+        if not self.hooked:
+            if results.lm_acc.item() >= self.acc_hook:
+                self.hooked = True
+                results.reset_optimizer = 1.0
+        if self.hooked:
+            self.hooked_steps += 1
+        results.hooked = 1.0 if self.hooked else 0.0
 
         # calculate kl metrics
         kl = (
@@ -89,12 +109,17 @@ class ZLmContrastTrainer(BaseTrainer):
         ).pow(2).sum(-2) / 2
         results.kl_loss = kl_to_loss.mean(0).sum() / model.output_length
 
+        results.hook_scale = min(1.0, self.hooked_steps / self.hook_warmup_steps)        
         results.contrast_scale = self.contrast_scale * (1e-7 + 1 - min(
-            1.0, step / self.contrast_steps
-        ))
+            1.0, self.hooked_steps / self.contrast_steps
+        )) * results.hook_scale
         results.kl_scale = self.kl_scale * min(
-            1.0, step / self.contrast_steps
-        )
+            1.0, self.hooked_steps / self.contrast_steps
+        ) * results.hook_scale
+
+        if not self.hooked:
+            results.kl_loss = results.kl_loss.detach()
+            results.contrast_loss = results.contrast_loss.detach()
 
         results.loss = (
             results.lm_loss_scaled +
