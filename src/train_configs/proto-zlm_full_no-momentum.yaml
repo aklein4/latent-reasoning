@@ -32,6 +32,7 @@ init_hooked: false
 init_hooked_steps: 0
 
 acc_hook: 0.75
+hook_warmup_steps: 1000
 
 upper_acc_bound: 0.99
 lower_acc_bound: 0.98
@@ -39,12 +40,10 @@ lower_acc_bound: 0.98
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
-running_beta: 0.9
+running_beta: 0.0
 
-kl_weight_threshold: -1
-
-hook_warmup_steps: 1000
-mean_warmup_steps: 1
+kl_weight_threshold: 0.25
+zero_optimize: true
 
 kl_scale: 0.1
 
