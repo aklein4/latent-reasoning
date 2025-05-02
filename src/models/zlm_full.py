@@ -512,7 +512,7 @@ class ZLmFullModel(PreTrainedModel):
             input_tokens = input_tokens.detach()
             output_tokens = output_tokens.detach()
 
-        mu_scale = torch.sqrt(F.softplus(self.log_mu_scale / np.log(2.0)))
+        mu_scale = torch.sqrt(F.softplus(self.log_mu_scale) / np.log(2.0))
         if disable_generator:
             mu_scale = mu_scale.detach()
 
