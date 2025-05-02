@@ -110,13 +110,13 @@ class ZLmAsymTrainer(BaseTrainer):
         )
 
         # get the latent usage
-        p_kl = self.running_kls_per_channel / (self.running_kls_per_channel.sum() + 1e-7)
+        p_kl = kl.mean(0) / (kl.mean(0).sum() + 1e-7)
         results.effective_parties = (1 / (p_kl ** 2).sum().item()) / p_kl.numel()
 
-        p_mean_kl = self.running_mean_kls_per_channel / (self.running_mean_kls_per_channel.sum() + 1e-7)
+        p_mean_kl = mean_kl.mean(0) / (mean_kl.mean(0).sum() + 1e-7)
         results.effective_parties_mean = (1 / (p_mean_kl ** 2).sum().item()) / p_mean_kl.numel()
 
-        p_zero_kl = self.running_zero_kl_per_channel / (self.running_zero_kl_per_channel.sum() + 1e-7)
+        p_zero_kl = zero_kl.mean(0) / (zero_kl.mean(0).sum() + 1e-7)
         results.effective_parties_zero = (1 / (p_zero_kl ** 2).sum().item()) / p_zero_kl.numel()
 
         if step % self.log_image_interval == 0:
