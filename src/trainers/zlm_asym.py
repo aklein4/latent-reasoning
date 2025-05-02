@@ -37,7 +37,7 @@ class ZLmAsymTrainer(BaseTrainer):
 
         # calculate lm metrics
         results = DotDict(
-            mu_scale = model_out.mu_scale,
+            mu_scale = model_out.mu_scale.item(),
 
             lm_loss = -logp.mean(),
             lm_pcorr = logp.exp().mean(),
@@ -98,7 +98,8 @@ class ZLmAsymTrainer(BaseTrainer):
         results.elbo = results.lm_loss + results.kl_per_token
 
         kl_to_loss = (
-            model_out.encoder_mus.detach() - model_out.generator_mus
+            (model_out.encoder_mus_unscaled.detach() * model_out.mu_scale)-
+            model_out.generator_mus
         ).pow(2).sum(-2) / 2
         results.kl_loss = (kl_to_loss.mean(0).sum() / model.output_length)
 

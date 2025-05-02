@@ -550,6 +550,8 @@ class ZLmFullModel(PreTrainedModel):
         
         # get flattened mus and z
         encoder_mus = self.encoder.padder.unpad(encoder_hidden_states[..., self.hidden_size:])
+
+        encoder_mus_unscaled = encoder_mus.clone()
         encoder_mus = encoder_mus * mu_scale
         
         z = noise + encoder_mus
@@ -610,7 +612,8 @@ class ZLmFullModel(PreTrainedModel):
             generator_mus=self.shaper.layerfy(generator_mus),
             lm_logits=lm_logits,
             z=z,
-            mu_scale=mu_scale.item(),
+            encoder_mus_unscaled=encoder_mus_unscaled,
+            mu_scale=mu_scale,
         )
 
 
