@@ -31,11 +31,14 @@ save_optimizer: false
 acc_hook: 0.75
 hook_warmup_steps: 1000
 
+upper_acc_bound: 0.95
+lower_acc_bound: 0.90
+
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
 contrast_temperature: 5.0
-contrast_steps: 10000
+contrast_steps: 100000000
 
 kl_weight_threshold: 0.25
 

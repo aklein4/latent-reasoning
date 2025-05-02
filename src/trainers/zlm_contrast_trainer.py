@@ -43,6 +43,12 @@ class ZLmContrastTrainer(BaseTrainer):
             lm_acc = (model_out.lm_logits.argmax(-1) == output_ids).float().mean(),
         )
 
+        results.lm_scale = 1e-7 + 1 - torch.clip(
+            (results.lm_acc - self.lower_acc_bound) / (self.upper_acc_bound - self.lower_acc_bound),
+            min=0.0,
+            max=1.0,
+        ).detach()
+
         lm_mask = 1e-7 + 1 - torch.clip(
             (logp - np.log(self.lower_lm_bound)) / (np.log(self.upper_lm_bound) - np.log(self.lower_lm_bound)),
             min=0.0,
@@ -50,7 +56,7 @@ class ZLmContrastTrainer(BaseTrainer):
         ).detach()
         results.lm_mask = lm_mask.mean()
 
-        results.lm_loss_scaled = -(logp * lm_mask).mean()
+        results.lm_loss_scaled = -(logp * lm_mask).mean() * results.lm_scale
 
         # handle hook
         if not self.hooked:
@@ -113,9 +119,9 @@ class ZLmContrastTrainer(BaseTrainer):
         results.contrast_scale = self.contrast_scale * (1e-7 + 1 - min(
             1.0, self.hooked_steps / self.contrast_steps
         )) * results.hook_scale
-        results.kl_scale = self.kl_scale * min(
+        results.kl_scale = self.kl_scale * (1e-7 + min(
             1.0, self.hooked_steps / self.contrast_steps
-        ) * results.hook_scale
+        )) * results.hook_scale
 
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
