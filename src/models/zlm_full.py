@@ -612,7 +612,7 @@ class ZLmFullModel(PreTrainedModel):
             generator_mus=self.shaper.layerfy(generator_mus),
             lm_logits=lm_logits,
             z=z,
-            encoder_mus_unscaled=encoder_mus_unscaled,
+            encoder_mus_unscaled=self.shaper.layerfy(encoder_mus_unscaled),
             mu_scale=mu_scale,
         )
 
