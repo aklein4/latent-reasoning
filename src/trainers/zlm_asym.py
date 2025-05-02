@@ -122,17 +122,17 @@ class ZLmAsymTrainer(BaseTrainer):
         if step % self.log_image_interval == 0:
 
             results.kl_levels = Image(
-                kl.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / kl.mean(0).max().item(),
+                kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
             results.mean_kl_levels = Image(
-                mean_kl.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).max().item(),
+                mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
             results.zero_kl_levels = Image(
-                zero_kl.mean(0).cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).max().item(),
+                zero_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
@@ -145,7 +145,7 @@ class ZLmAsymTrainer(BaseTrainer):
             ).mean(0)
             quant = torch.quantile(dists.flatten(), 0.90, dim=-1).item()
             results.mu_dists = Image(
-                np.clip(dists.cpu().numpy() / quant, 0.0, 1.0),
+                np.clip(dists.detach().cpu().numpy() / quant, 0.0, 1.0),
                 mode='L'
             )
 
@@ -155,7 +155,7 @@ class ZLmAsymTrainer(BaseTrainer):
             ).mean(0)
             sim_quant = torch.quantile(sims.flatten(), 0.90, dim=-1).item()
             results.mu_sims = Image(
-                np.clip(sims.cpu().numpy() / sim_quant, 0.0, 1.0),
+                np.clip(sims.detach().cpu().numpy() / sim_quant, 0.0, 1.0),
                 mode='L'
             )
 
