@@ -32,7 +32,6 @@ class ZLmFullConfig(PretrainedConfig):
         latent_size_per_layer: int = 8,
         num_latent_layers: int = 10,
         mu_init_scale: float = 1.0,
-        small_init_scale: float = 1.0,
         *args,
         **kwargs
     ):
@@ -47,7 +46,6 @@ class ZLmFullConfig(PretrainedConfig):
         self.num_latent_layers = num_latent_layers
 
         self.mu_init_scale = mu_init_scale
-        self.small_init_scale = small_init_scale
 
         super().__init__(*args, **kwargs)
 
@@ -293,17 +291,10 @@ class ZLmLayer(nn.Module):
         mu = self.mu_up(
             self.mu_norm(hidden_states)
         )
-
-        # get z
-        if self.is_encoder or self.sample_mode:
-            # noise_or_z should be noise
-            z = noise_or_z + mu
-        else:
-            # noise_or_z should be z
-            z = noise_or_z
+        mu = F.rms_norm(mu, normalized_shape=[mu.shape[-1]], eps=self.mu_norm.eps)
 
         # add z to the residual stream
-        y = self.z_down(noise_or_z if self.is_encoder else z)
+        y = self.z_down(noise_or_z)
         
         if self.down_mask is not None:
             hidden_states = hidden_states + y * self.down_mask[None, ..., None]
@@ -491,18 +482,18 @@ class ZLmFullModel(PreTrainedModel):
 
         # scale input layers by embedding stats
         self.encoder_noise_proj_in.weight.data *= embed_std[0][..., None]
-        self.generator_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
-        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None] / config.mu_init_scale
+        self.generator_z_proj_in.weight.data *= embed_std[0][..., None]
+        self.decoder_z_proj_in.weight.data *= embed_std[0][..., None]
 
         # fix the output norms
         self.encoder.norm = nn.Identity()
         self.generator.norm = nn.Identity()
         # decoder norm is fine
 
-        # bias for the generator to estimate the mu
-        # self.generator_mu_bias = nn.Parameter(
-        #     torch.zeros(self.z_length, self.total_latent_size)
-        # )
+        # init the mu scale
+        self.log_mu_scale = nn.Parameter(
+            torch.ones(1,) * config.mu_init_scale
+        )
 
         # Initialize weights and gradient checkpointing
         self.post_init()
@@ -527,6 +518,10 @@ class ZLmFullModel(PreTrainedModel):
         if disable_generator:
             input_tokens = input_tokens.detach()
             output_tokens = output_tokens.detach()
+
+        mu_scale = torch.sqrt(F.softplus(self.log_mu_scale / np.log(2.0)))
+        if disable_generator:
+            mu_scale = mu_scale.detach()
 
         # generate the noise
         noise = torch.randn(
@@ -561,11 +556,13 @@ class ZLmFullModel(PreTrainedModel):
         
         # get flattened mus and z
         encoder_mus = self.encoder.padder.unpad(encoder_hidden_states[..., self.hidden_size:])
+        encoder_mus = encoder_mus * mu_scale
+        
         z = noise + encoder_mus
 
         # get the generator input
         if disable_generator:
-            generator_mus = torch.zeros_like(encoder_mus)
+            generator_mus = torch.ones_like(encoder_mus)
 
         else:
             generator_hidden_states = torch.cat(
@@ -591,6 +588,7 @@ class ZLmFullModel(PreTrainedModel):
 
             # get the flattened generator mus
             generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
+            generator_mus = generator_mus * mu_scale
 
             # generator_mus = generator_mus + expand_to_batch(self.generator_mu_bias, generator_mus)
 
@@ -618,6 +616,7 @@ class ZLmFullModel(PreTrainedModel):
             generator_mus=self.shaper.layerfy(generator_mus),
             lm_logits=lm_logits,
             z=z,
+            mu_scale=mu_scale.item(),
         )
 
 
