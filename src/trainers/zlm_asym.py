@@ -105,9 +105,9 @@ class ZLmAsymTrainer(BaseTrainer):
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
 
-        results.kl_scale = self.kl_scale * np.sin(
-            min(1.0, self.hooked_steps / self.hook_warmup_steps) * np.pi / 2
-        )
+        results.kl_scale = self.kl_scale * (1 + np.sin(
+            min(1.0, self.hooked_steps / self.hook_warmup_steps) * np.pi - (np.pi / 2)
+        )) / 2
 
         results.loss = (
             results.lm_loss_scaled +
