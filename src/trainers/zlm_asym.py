@@ -102,8 +102,12 @@ class ZLmAsymTrainer(BaseTrainer):
             model_out.generator_mus
         ).pow(2).sum(-2) / 2
         results.kl_loss = (kl_to_loss.mean(0).sum() / model.output_length)
+        if not self.hooked:
+            results.kl_loss = results.kl_loss.detach()
 
-        results.kl_scale = self.kl_scale * min(1.0, self.hooked_steps / self.hook_warmup_steps)
+        results.kl_scale = self.kl_scale * np.sin(
+            min(1.0, self.hooked_steps / self.hook_warmup_steps) * np.pi / 2
+        )
 
         results.loss = (
             results.lm_loss_scaled +
