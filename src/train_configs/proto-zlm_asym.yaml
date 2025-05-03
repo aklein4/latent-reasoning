@@ -32,7 +32,7 @@ init_hooked: false
 init_hooked_steps: 0
 
 acc_hook: 0.75
-hook_warmup_steps: 1000
+hook_warmup_steps: 5000
 
 upper_acc_bound: 0.95
 lower_acc_bound: 0.90

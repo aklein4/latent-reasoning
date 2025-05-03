@@ -32,6 +32,7 @@ class ZLmFullConfig(PretrainedConfig):
         latent_size_per_layer: int = 8,
         num_latent_layers: int = 10,
         mu_init_scale: float = 1.0,
+        small_init_scale: float = 1.0,
         *args,
         **kwargs
     ):
@@ -46,6 +47,7 @@ class ZLmFullConfig(PretrainedConfig):
         self.num_latent_layers = num_latent_layers
 
         self.mu_init_scale = mu_init_scale
+        self.small_init_scale = small_init_scale
 
         super().__init__(*args, **kwargs)
 
@@ -251,6 +253,9 @@ class ZLmLayer(nn.Module):
             bias=False
         )
 
+        if not self.is_encoder:
+            self.mu_up.weight.data *= config.small_init_scale
+
         self.shaper = LatentShaper(
             self.latent_size_per_layer,
             self.num_latent_layers
@@ -284,7 +289,8 @@ class ZLmLayer(nn.Module):
         mu = self.mu_up(
             self.mu_norm(hidden_states)
         )
-        mu = F.rms_norm(mu, normalized_shape=[mu.shape[-1]], eps=self.mu_norm.eps)
+        if self.is_encoder:
+            mu = F.rms_norm(mu, normalized_shape=[mu.shape[-1]], eps=self.mu_norm.eps)
 
         # add z to the residual stream
         y = self.z_down(noise_or_z)

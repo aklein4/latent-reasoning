@@ -89,11 +89,11 @@ class ZLmAsymTrainer(BaseTrainer):
         results.kl_per_token = (kl.mean(0).sum() / model.output_length)
         results.kl_per_channel = (kl.mean() / model.latent_size_per_layer)
         
-        results.mean_kl_per_token = (mean_kl.mean(0).sum() / model.output_length)
-        results.mean_kl_per_channel = (mean_kl.mean() / model.latent_size_per_layer)
+        results.kl_per_token_mean = (mean_kl.mean(0).sum() / model.output_length)
+        results.kl_per_channel_mean = (mean_kl.mean() / model.latent_size_per_layer)
 
-        results.zero_kl_per_token = (zero_kl.mean(0).sum() / model.output_length)
-        results.zero_kl_per_channel = (zero_kl.mean() / model.latent_size_per_layer)
+        results.kl_per_token_zero = (zero_kl.mean(0).sum() / model.output_length)
+        results.kl_per_channel_zero = (zero_kl.mean() / model.latent_size_per_layer)
 
         results.elbo = results.lm_loss + results.kl_per_token
 
@@ -127,15 +127,15 @@ class ZLmAsymTrainer(BaseTrainer):
                 mode='L'
             )
 
-            results.mean_kl_levels = Image(
+            results.kl_levels_mean = Image(
                 mean_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / mean_kl.mean(0).detach().max().item(),
                 mode='L'
             )
 
-            results.zero_kl_levels = Image(
-                zero_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).detach().max().item(),
-                mode='L'
-            )
+            # results.zero_kl_levels = Image(
+            #     zero_kl.mean(0).detach().cpu().numpy().reshape(model.z_length, model.num_latent_layers).T / zero_kl.mean(0).detach().max().item(),
+            #     mode='L'
+            # )
 
             enc_mus_to_plot = model.shaper.unlayerfy(model_out.encoder_mus).detach()
             gen_mus_to_plot = model.shaper.unlayerfy(model_out.generator_mus).detach()
