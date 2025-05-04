@@ -574,6 +574,7 @@ class ZLmFullModel(PreTrainedModel):
         # get the generator input
         if disable_generator:
             generator_mus = torch.ones_like(encoder_mus)
+            generator_mus_unscaled = torch.ones_like(encoder_mus)
 
         else:
             generator_hidden_states = torch.cat(
@@ -599,6 +600,8 @@ class ZLmFullModel(PreTrainedModel):
 
             # get the flattened generator mus
             generator_mus = self.generator.padder.unpad(generator_hidden_states[..., self.hidden_size:])
+            
+            generator_mus_unscaled = generator_mus.clone()
             generator_mus = generator_mus * mu_scale
 
             # generator_mus = generator_mus + expand_to_batch(self.generator_mu_bias, generator_mus)
@@ -628,6 +631,7 @@ class ZLmFullModel(PreTrainedModel):
             lm_logits=lm_logits,
             z=z,
             encoder_mus_unscaled=self.shaper.layerfy(encoder_mus_unscaled),
+            generator_mus_unscaled=self.shaper.layerfy(generator_mus_unscaled),
             mu_scale=mu_scale,
         )
 

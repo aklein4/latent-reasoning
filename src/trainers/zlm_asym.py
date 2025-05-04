@@ -12,18 +12,23 @@ from utils.dot_dict import DotDict
 
 class ZLmAsymTrainer(BaseTrainer):
     
+    inited = False
     hooked = False
     hooked_steps = 0
 
 
-    def __init___(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    # def __init___(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
+    #     extra_init()
 
+    def extra_init(self):
         self.hooked = self.init_hooked
         self.hooked_steps = self.init_hooked_steps
 
 
     def train_step(self, step, model, input_ids, output_ids):
+        if not self.inited:
+            self.extra_init()
 
         # get model predictions
         model_out = model(input_ids, output_ids, disable_generator=(not self.hooked))
@@ -123,6 +128,8 @@ class ZLmAsymTrainer(BaseTrainer):
 
         p_zero_kl = zero_kl.mean(0) / (zero_kl.mean(0).sum() + 1e-7)
         results.effective_parties_zero = (1 / (p_zero_kl ** 2).sum().item()) / p_zero_kl.numel()
+
+        results.generator_mu_norm = model_out.generator_mus_unscaled.norm(dim=-2).mean()
 
         if step % self.log_image_interval == 0:
 
