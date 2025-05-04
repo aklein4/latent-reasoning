@@ -504,6 +504,15 @@ class ZLmFullModel(PreTrainedModel):
         return
 
     
+    def load_state_dict(self, state_dict, strict=True, *args, **kwargs):
+        super().load_state_dict(state_dict, strict=strict, *args, **kwargs)
+        
+        if not strict:
+            for m in self.modules():
+                if isinstance(m, ZLmLayer):
+                    m.mu_norm.weight.data = torch.ones_like(m.mu_norm.weight.data)
+
+    
     def forward(
         self,
         input_ids: torch.LongTensor,
