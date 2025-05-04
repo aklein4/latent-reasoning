@@ -40,6 +40,9 @@ lower_acc_bound: 0.90
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
+grad_to_encoder: true
+kl_weight_threshold: 0.25
+
 kl_scale: 0.1
 
 log_image_interval: 100

@@ -13,13 +13,10 @@ from utils.dot_dict import DotDict
 class ZLmAsymTrainer(BaseTrainer):
     
     inited = False
+
     hooked = False
     hooked_steps = 0
 
-
-    # def __init___(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-    #     extra_init()
 
     def extra_init(self):
         self.hooked = self.init_hooked
@@ -70,10 +67,6 @@ class ZLmAsymTrainer(BaseTrainer):
                 self.hooked = True
                 results.reset_optimizer = 1.0
 
-                # model.generator_mu_bias.data = model.shaper.unlayerfy(
-                #     model_out.encoder_mus
-                # ).mean(0).clone().detach()
-
         if self.hooked:
             self.hooked_steps += 1
         results.hooked = 1.0 if self.hooked else 0.0
@@ -102,11 +95,32 @@ class ZLmAsymTrainer(BaseTrainer):
 
         results.elbo = results.lm_loss + results.kl_per_token
 
-        kl_to_loss = (
-            (model_out.encoder_mus_unscaled.detach() * model_out.mu_scale) -
-            model_out.generator_mus
-        ).pow(2).sum(-2) / 2
-        results.kl_loss = (kl_to_loss.mean(0).sum() / model.output_length)
+        # calculate kl loss
+        if self.grad_to_encoder:
+
+            normalized_kl_weights = kl.mean(0) / (kl.mean(0).max() + 1e-7)
+            clipped_kl_weights = torch.clip(
+                normalized_kl_weights - self.kl_weight_threshold,
+                min=0.0,
+            )
+
+            kl_val_per_token = (kl.mean(0) * clipped_kl_weights).sum() / model.output_length
+            kl_val_multiplier = results.kl_per_token / (1e-7 + kl_val_per_token)
+            final_kl_weights = clipped_kl_weights * kl_val_multiplier.detach().item()
+
+            kl_to_loss = (
+                scale_gradient(model_out.encoder_mus, final_kl_weights[None, :, None, :].detach()) -
+                model_out.generator_mus
+            ).pow(2).sum(-2) / 2
+            results.kl_loss = kl_to_loss.mean(0).sum() / model.output_length
+
+        else:
+            kl_to_loss = (
+                (model_out.encoder_mus_unscaled.detach() * model_out.mu_scale) -
+                model_out.generator_mus
+            ).pow(2).sum(-2) / 2
+            results.kl_loss = (kl_to_loss.mean(0).sum() / model.output_length)
+
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
 
@@ -129,7 +143,7 @@ class ZLmAsymTrainer(BaseTrainer):
         p_zero_kl = zero_kl.mean(0) / (zero_kl.mean(0).sum() + 1e-7)
         results.effective_parties_zero = (1 / (p_zero_kl ** 2).sum().item()) / p_zero_kl.numel()
 
-        results.generator_mu_norm = model_out.generator_mus_unscaled.norm(dim=-2).mean()
+        results.generator_mu_norm = model_out.generator_mus_unscaled.norm(dim=-2).mean() / np.sqrt(model_out.generator_mus_unscaled.shape[-2])
 
         if step % self.log_image_interval == 0:
 
