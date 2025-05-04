@@ -57,6 +57,18 @@ def load_checkpoint(
         
     model = MODEL_DICT[model_type](config, **model_kwargs)
 
+    loaded_state = torch.load(cpkt_path, map_location="cpu")["model"]
+    if not strict:
+
+        current_state = model.state_dict()
+        filtered_state = {}
+        for k, v in loaded_state.items():
+            
+            if (not k in current_state.keys()) or (loaded_state[k].shape == current_state[k].shape):
+                filtered_state[k] = v
+        
+        loaded_state = filtered_state
+
     model.load_state_dict(
         torch.load(cpkt_path, map_location="cpu")["model"],
         strict=strict,

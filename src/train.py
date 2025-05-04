@@ -16,6 +16,7 @@ def main(args):
     print("Loading configs...")
     train_config = load_config(args.train_config, kind="train")
 
+    print("Loading model...")
     if args.model_checkpoint is not None:
         model = load_checkpoint(
             args.model_checkpoint,
