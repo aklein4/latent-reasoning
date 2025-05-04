@@ -22,6 +22,7 @@ def main(args):
     if args.model_checkpoint is not None:
         model = load_checkpoint(
             args.model_checkpoint,
+            strict=(not args.no_strict_load),
         )
 
     else:
@@ -76,6 +77,7 @@ if __name__ == '__main__':
 
     args.add_argument("--model_config", type=str, required=False, default=None)
     args.add_argument("--model_checkpoint", type=str, required=False, default=None)
+    args.add_argument("--no_strict_load", action="store_true")
 
     args.add_argument("--train_config", type=str, required=True)
 
