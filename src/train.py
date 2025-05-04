@@ -16,13 +16,11 @@ def main(args):
     print("Loading configs...")
     train_config = load_config(args.train_config, kind="train")
 
-    print("Loading model...")
-    assert (args.model_checkpoint is not None) ^ (args.model_config is not None), "Either model_config or model_checkpoint must be provided"
-    
     if args.model_checkpoint is not None:
         model = load_checkpoint(
             args.model_checkpoint,
             strict=(not args.no_strict_load),
+            config=load_config(args.model_config, kind="model"),
         )
 
     else:

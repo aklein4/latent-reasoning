@@ -38,15 +38,23 @@ import utils.constants as constants
 def load_checkpoint(
     path: str,
     strict: bool = True,
+    config: dict = None,
     **model_kwargs
 ):
     cpkt_path = os.path.join(constants.BASE_PATH, path, "checkpoint.ckpt")
     config_path = os.path.join(constants.BASE_PATH, path, "config.json")
 
-    with open(config_path, "r") as f:
-        model_type = json.load(f)["model_type"]
+    if config is None:
+        with open(config_path, "r") as f:
+            model_type = json.load(f)["model_type"]
 
-    config = CONFIG_DICT[model_type].from_json_file(config_path)
+        config = CONFIG_DICT[model_type].from_json_file(config_path)
+
+    else:
+        model_type = config["model_type"]
+
+        config = CONFIG_DICT[model_type](**config)
+        
     model = MODEL_DICT[model_type](config, **model_kwargs)
 
     model.load_state_dict(
