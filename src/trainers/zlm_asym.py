@@ -26,6 +26,7 @@ class ZLmAsymTrainer(BaseTrainer):
     def train_step(self, step, model, input_ids, output_ids):
         if not self.inited:
             self.extra_init()
+            self.inited = True
 
         # get model predictions
         model_out = model(input_ids, output_ids, disable_generator=(not self.hooked))
