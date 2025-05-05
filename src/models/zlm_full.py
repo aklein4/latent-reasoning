@@ -262,6 +262,8 @@ class ZLmLayer(nn.Module):
         )
 
         self.sample_mode = False
+        self.mu_scale = None
+        self.norm_mode = None
         self.down_mask = None
 
 
@@ -289,14 +291,19 @@ class ZLmLayer(nn.Module):
         mu = self.mu_up(
             self.mu_norm(hidden_states)
         )
-        if self.is_encoder:
+        if self.is_encoder or self.norm_mode:
             mu = F.rms_norm(mu, normalized_shape=[mu.shape[-1]], eps=self.mu_norm.eps)
+        
+        if self.mu_scale is not None:
+            mu = mu * self.mu_scale
+        if self.sample_mode:
+            noise_or_z = noise_or_z + mu
 
         # add z to the residual stream
         y = self.z_down(noise_or_z)
         
         if self.down_mask is not None:
-            hidden_states = hidden_states + y * self.down_mask[None, ..., None]
+            hidden_states = hidden_states + y * self.down_mask
 
         else:
             if self.suffix_length > 0:
@@ -504,6 +511,10 @@ class ZLmFullModel(PreTrainedModel):
         return
 
     
+    def get_mu_scale(self):
+        return torch.sqrt(F.softplus(self.log_mu_scale * self.scalar_scaler) / np.log(2.0))
+
+
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -519,7 +530,7 @@ class ZLmFullModel(PreTrainedModel):
             input_tokens = input_tokens.detach()
             output_tokens = output_tokens.detach()
 
-        mu_scale = torch.sqrt(F.softplus(self.log_mu_scale * self.scalar_scaler) / np.log(2.0))
+        mu_scale = self.get_mu_scale()
         if disable_generator:
             mu_scale = mu_scale.detach()
 
@@ -650,6 +661,20 @@ class ZLmFullModel(PreTrainedModel):
                 m.down_mask = mask
 
 
+    def _set_mu_scale(self, boost_scale):
+        scale = self.get_mu_scale().item() * boost_scale
+
+        for m in self.modules():
+            if isinstance(m, ZLmLayer):
+                m.mu_scale = scale
+
+    
+    def _set_norm_mode(self, mode):
+        for m in self.modules():
+            if isinstance(m, ZLmLayer):
+                m.norm_mode = mode
+
+
     def sample_noise(
         self, 
         input_ids: torch.LongTensor
@@ -670,7 +695,8 @@ class ZLmFullModel(PreTrainedModel):
         self,
         input_ids: torch.LongTensor,
         temperature: float = 1.0,
-        noise=None
+        noise=None,
+        boost_scale: float = 1.0,
     ):
         from transformers.cache_utils import DynamicCache
         from tqdm import tqdm
@@ -688,10 +714,14 @@ class ZLmFullModel(PreTrainedModel):
         # initialize the cache
         cache = DynamicCache()
 
+        # set sample mode
+        self._set_sample_mode(True)
+        self._set_mu_scale(boost_scale)
+        # self._set_norm_mode(True)
+
         # pass the input tokens through the generator
         self._set_norm_index(0)
-        self._set_sample_mode(True)
-        self._set_down_mask(torch.zeros_like(input_tokens[0, :, 0]))
+        self._set_down_mask(0.0)
 
         input_embeds = torch.cat(
             [
@@ -712,7 +742,7 @@ class ZLmFullModel(PreTrainedModel):
         z_tokens = expand_to_batch(self.generator_z_tokens, input_tokens)
 
         self._set_norm_index(1)
-        self._set_down_mask(torch.ones_like(z_prev[0, :, 0]))
+        self._set_down_mask(1.0)
 
         for i in tqdm(range(self.z_length), desc="Sampling z tokens"):
 
@@ -730,7 +760,7 @@ class ZLmFullModel(PreTrainedModel):
                 past_key_values=cache,
             )
 
-            z_prev = outputs.last_hidden_state[..., self.hidden_size:]
+            z_prev = outputs.last_hidden_state[..., self.hidden_size:] + noise[..., i:i+1, :]
             zs.append(z_prev)
 
             cache = outputs.past_key_values
@@ -742,20 +772,23 @@ class ZLmFullModel(PreTrainedModel):
 
         cache = DynamicCache()
 
-        # pass the input tokens and z through the decoder
-        input_embeds = torch.cat(
-            [
-                input_tokens,
-                expand_to_batch(self.decoder_z_token.repeat(self.z_length, 1), input_tokens) + self.decoder_z_proj_in(z),
-            ],
-            dim=-2
-        )
+        # pass the input tokens through the decoder
+        self._set_norm_index(0)
         cache = self.decoder(
-            inputs_embeds=input_embeds,
+            inputs_embeds=input_tokens,
             use_cache=True,
             past_key_values=cache,
         ).past_key_values
 
+        # pass z through the decoder
+        self._set_norm_index(1)
+        cache = self.decoder(
+            inputs_embeds=expand_to_batch(self.decoder_z_tokens, input_tokens) + self.decoder_z_proj_in(z),
+            use_cache=True,
+            past_key_values=cache,
+        ).past_key_values
+            
+        self._set_norm_index(2)
         prev_token = expand_to_batch(self.decoder_start_output_token, input_tokens)
         output_tokens = []
         for i in tqdm(range(self.output_length), desc="Sampling output tokens"):
