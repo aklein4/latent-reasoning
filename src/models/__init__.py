@@ -6,6 +6,7 @@ from models.uncond_zlm import UncondZLmConfig, UncondZLmModel
 from models.zae import ZAEConfig, ZAEModel
 from models.zlm_full import ZLmFullConfig, ZLmFullModel
 from models.zlm_contrast import ZLmContrastConfig, ZLmContrastModel
+from models.zlm_hybrid import ZLmHybridConfig, ZLmHybridModel
 
 
 CONFIG_DICT = {
@@ -15,6 +16,7 @@ CONFIG_DICT = {
     "zae": ZAEConfig,
     "zlm_full": ZLmFullConfig,
     "zlm_contrast": ZLmContrastConfig,
+    "zlm_hybrid": ZLmHybridConfig,
 }
 
 
@@ -25,6 +27,7 @@ MODEL_DICT = {
     "zae": ZAEModel,
     "zlm_full": ZLmFullModel,
     "zlm_contrast": ZLmContrastModel,
+    "zlm_hybrid": ZLmHybridModel,
 }
 
 

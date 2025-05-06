@@ -5,7 +5,9 @@ from trainers.uncond_zlm_trainer import UncondZLmTrainer
 from trainers.zae_trainer import ZAETrainer
 from trainers.zlm_full_trainer import ZLmFullTrainer
 from trainers.zlm_contrast_trainer import ZLmContrastTrainer
-from trainers.zlm_asym import ZLmAsymTrainer
+from trainers.zlm_asym_trainer import ZLmAsymTrainer
+from trainers.zlm_hybrid_trainer import ZLmHybridTrainer
+
 
 TRAINER_DICT = {
     "zlm": ZLmTrainer,
@@ -14,4 +16,5 @@ TRAINER_DICT = {
     "zlm_full": ZLmFullTrainer,
     "zlm_contrast": ZLmContrastTrainer,
     "zlm_asym": ZLmAsymTrainer,
+    "zlm_hybrid": ZLmHybridTrainer,
 }
