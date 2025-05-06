@@ -382,6 +382,9 @@ class ZLmFullModel(PreTrainedModel):
         self.embed_tokens = base_model.model.embed_tokens
         self.embed_tokens.weight = nn.Parameter(self.embed_tokens.weight.data.clone().detach())
 
+        self.embed_tokens_generator = base_model.model.embed_tokens
+        self.embed_tokens_generator.weight = nn.Parameter(self.embed_tokens_generator.weight.data.clone().detach())
+
         self.lm_head = base_model.lm_head
         self.lm_head.weight = nn.Parameter(self.lm_head.weight.data.clone().detach())
 
@@ -510,6 +513,15 @@ class ZLmFullModel(PreTrainedModel):
     def init_weights(self):
         return
 
+
+    # def load_state_dict(self, state_dict, *args, **kwargs):
+    #     new_dict = {}
+    #     for k, v in state_dict.items():
+    #         if "generator" not in k:
+    #             new_dict[k] = v
+        
+    #     super().load_state_dict(new_dict, strict=False)
+
     
     def get_mu_scale(self):
         return torch.sqrt(F.softplus(self.log_mu_scale * self.scalar_scaler) / np.log(2.0))
@@ -581,7 +593,7 @@ class ZLmFullModel(PreTrainedModel):
         else:
             generator_hidden_states = torch.cat(
                 [
-                    input_tokens,
+                    self.embed_tokens_generator(input_ids),
                     expand_to_batch(self.generator_z_tokens[:1], input_tokens),
                     expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
                 ],
