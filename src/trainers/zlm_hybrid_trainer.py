@@ -32,7 +32,7 @@ class ZLmHybridTrainer(BaseTrainer):
         alpha = np.sqrt(
             1e-7 +
             (
-                self.base_alpha**2 *
+                self.base_alpha *
                 (1 - min(1.0, self.hooked_steps / self.alpha_steps))
             ) * 2 / (model.total_latent_size * model.z_length / model.output_length)
         )
