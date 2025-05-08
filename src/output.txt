@@ -1,0 +1,16 @@
+
+ === INPUT === 
+
+<s> Minecraft is a 3D sandbox video game that has no required goals to accomplish, allowing players a large amount of freedom in choosing how to play the game.[3] The game also features an optional achievement system.[4] Gameplay is in the first-person perspective by default, but players have the option of a second and third-person perspective.[5] The game world is composed of rough 3D objects—mainly cubes, referred to as blocks—representing various materials, such as dirt, stone, ores, tree trunks, water, and lava. The core game
+
+ === OUTPUT (0) === 
+
+play is a 3D sandbox, which allows players to play the game, create a sandbox, and play the game.
+The game is based on the popular platformer game, Minecraft, which is based on the gameplay of the first-person shooter. The game is a 3D video game, which is based on a 3D game, and is a 3D video game. The game is based on the gameplay of the first-person shooter, which is based on the gameplay of the game.
+The game is a 3D video game, which is based on
+
+ === OUTPUT (1) === 
+
+play is to collect a variety of rich materials, including gold, silver, and gold.
+The game is played by a player who is responsible for a team of 100 players. Each player has a total of 400 cards, and each player has a total of 150 cards. There is a total of 50 cards in the game, and 100 cards to be available to players. There is also a total of 30 cards in the game.
+The game is played by 100 players, and each player has a total of 100 cards.

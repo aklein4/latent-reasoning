@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 
 
 # CHECKPOINT = 'local_data/proto-zlm_asym-beta/000000042500'
-CHECKPOINT = 'local_data/proto-zlm_asym-beta-grad/000000002500'
+# CHECKPOINT = 'local_data/proto-zlm_asym-beta-grad/000000005000'
+CHECKPOINT = 'local_data/proto-zlm_hybrid-alpha/000000045000'
 
 
 def slerp(val, low, high):
@@ -55,32 +56,29 @@ def main():
     tokens = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
     assert tokens.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
 
-    noise = model.sample_noise(tokens)
-
-    # tokens = tokens.repeat(8, 1)
-    # noise = noise.repeat(8, 1, 1)
-
-    # boosts = torch.tensor([0.0, 1.0, 1.5, 2.0, 3.0, 5.0, 7.5, 10.0])[:, None, None]
+    tokens = tokens.repeat(2, 1)
 
     output = model.sample(
         tokens,
-        noise=noise,
-        temperature=1.0,
-        # boost_scale=boosts,
+        temperature=0.5,
     )
+
+    kl = (
+        output.mu[0] - output.mu[1]
+    ).pow(2).sum(dim=-1) / 2
+
+    plt.plot(kl.detach().cpu().numpy())
+    plt.savefig("kl.png")
 
     with open("output.txt", "w") as f:
 
         f.write("\n === INPUT === \n\n")
         f.write(tokenizer.decode(tokens[0], skip_special_tokens=False))
 
-        f.write("\n === INPUT === \n\n")
-        f.write(tokenizer.decode(output.tokens[0], skip_special_tokens=False))
+        for i in range(len(tokens)):
 
-        # for i in range(len(boosts)):
-
-        #     f.write(f"\n\n === OUTPUT (boost = {boosts[i].item()})=== \n\n")
-        #     f.write(tokenizer.decode(output.tokens[i], skip_special_tokens=True))
+            f.write(f"\n\n === OUTPUT ({i}) === \n\n")
+            f.write(tokenizer.decode(output.tokens[i], skip_special_tokens=True))
 
 
 if __name__ == '__main__':

@@ -11,8 +11,7 @@ import utils.constants as constants
 import matplotlib.pyplot as plt
 
 
-# CHECKPOINT = 'local_data/proto-zlm_asym-beta/000000042500'
-CHECKPOINT = 'local_data/proto-zlm_asym-beta-grad/000000005000'
+CHECKPOINT = 'local_data/proto-zlm_hybrid-alpha/000000030000'
 
 
 def slerp(val, low, high):
@@ -55,30 +54,33 @@ def main():
     tokens = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=model.input_length).input_ids
     assert tokens.shape[-1] == model.input_length, f"Input length {tokens.shape[-1]} does not match model input length {model.input_length}."
 
-    tokens = tokens.repeat(2, 1)
+    noise_1 = model.sample_noise(tokens)
+    noise_2 = model.sample_noise(tokens)
+
+    tokens = tokens.repeat(7, 1)
+    noise = torch.cat(
+        [
+            slerp(t, noise_1, noise_2)
+            for t in np.linspace(0.0, 0.1, 7)
+        ],
+        dim=0
+    )
 
     output = model.sample(
         tokens,
-        temperature=1.0,
+        noise=noise,
+        temperature=0.75,
+        # boost_scale=boosts,
     )
-
-    kl = (
-        output.mu[0] - output.mu[1]
-    ).pow(2).sum(dim=-1) / 2
-    kl = kl * kl.shape[-1] / model.output_length
-
-    plt.plot(kl.detach().cpu().numpy())
-    plt.savefig("kl.png")
 
     with open("output.txt", "w") as f:
 
         f.write("\n === INPUT === \n\n")
         f.write(tokenizer.decode(tokens[0], skip_special_tokens=False))
 
-        for i in range(len(tokens)):
-
-            f.write(f"\n\n === OUTPUT ({i})=== \n\n")
-            f.write(tokenizer.decode(output.tokens[i], skip_special_tokens=True))
+        for i in range(len(output.tokens)):
+            f.write(f"\n\n === OUTPUT {i} === \n\n")
+            f.write(tokenizer.decode(output.tokens[i], skip_special_tokens=False))
 
 
 if __name__ == '__main__':

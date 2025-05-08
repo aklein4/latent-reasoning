@@ -1,0 +1,19 @@
+
+ === INPUT === 
+
+<s> Wars have given us the Jeep, the computer and even the microwave.
+Will the war in Iraq give us the Tiger?
+Military scientists at Edgewood Chemical Biological Center at Aberdeen Proving Ground hope so. The machine - its full name is the Tactical Garbage to Energy Refinery - combines a chute, an engine, chemical tanks and other components, giving it the appearance of a lunar rover. It's designed to turn food and waste into fuel. If it works, it could save scores of American and Iraqi lives
+
+ === OUTPUT (0)=== 
+
+.
+"It's a great way to think about the way we're going to get it done," said Jeep's alumnus. "We have to be creative. We're going to have to be creative to make sure that we're going to be creative. I think we're going to have to be creative to make sure that we're going to be creative."
+While it's not a bad idea, it's not about to be a great one.
+"We're going to have to be creative," said Jeep's
+
+ === OUTPUT (1)=== 
+
+.
+"I'm very happy to see the machine," said Tiger Designer Mike McDowell, who is the director of the Tiger Designer Program. "We're very excited to be able to use our data to help us to be able to use our own energy and to be able to help people."
+The Tiger design, which will be a joint effort between the Jeep and the Tiger, is a great example of the importance of research. The Tiger is a small machine, which is designed to be used to help the world's best military and air force. The Tiger

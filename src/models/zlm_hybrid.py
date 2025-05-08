@@ -257,8 +257,6 @@ class ZLmLayer(nn.Module):
         )
 
         self.sample_mode = False
-        self.mu_scale = None
-        self.norm_mode = None
         self.down_mask = None
 
 
@@ -287,8 +285,6 @@ class ZLmLayer(nn.Module):
             self.mu_norm(hidden_states)
         )
         
-        if self.mu_scale is not None:
-            mu = mu * self.mu_scale
         if self.sample_mode:
             noise_or_z = noise_or_z + mu
 
@@ -649,20 +645,6 @@ class ZLmHybridModel(PreTrainedModel):
                 m.down_mask = mask
 
 
-    def _set_mu_scale(self, boost_scale):
-        scale = self.get_mu_scale().item() * boost_scale
-
-        for m in self.modules():
-            if isinstance(m, ZLmLayer):
-                m.mu_scale = scale
-
-    
-    def _set_norm_mode(self, mode):
-        for m in self.modules():
-            if isinstance(m, ZLmLayer):
-                m.norm_mode = mode
-
-
     def sample_noise(
         self, 
         input_ids: torch.LongTensor
@@ -704,8 +686,6 @@ class ZLmHybridModel(PreTrainedModel):
 
         # set sample mode
         self._set_sample_mode(True)
-        self._set_mu_scale(boost_scale)
-        # self._set_norm_mode(True)
 
         # pass the input tokens through the generator
         self._set_norm_index(0)
