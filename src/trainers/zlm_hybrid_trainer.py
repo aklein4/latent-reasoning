@@ -29,11 +29,16 @@ class ZLmHybridTrainer(BaseTrainer):
             self.inited = True
 
         # calculate alpha
-        alpha = (1 - min(1.0, self.hooked_steps / self.alpha_steps)) * np.sqrt(
+        alpha_prog = 1 - (
+            np.sin(
+                min(1.0, self.hooked_steps / self.alpha_steps) * np.pi - (np.pi / 2)
+            ) + 1
+        ) / 2
+        alpha = alpha_prog * np.sqrt(
             self.base_alpha
             * 2 / (model.total_latent_size * model.z_length / model.output_length)
         )
-
+        
         # get model predictions
         model_out = model(input_ids, output_ids, disable_generator=(not self.hooked), alpha=alpha)
 
