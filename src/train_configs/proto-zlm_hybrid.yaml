@@ -13,11 +13,11 @@ num_epochs: 1
 optimizer_type: adamw
 optimizer_kwargs:
 
-    num_warmup_steps: 5000
-    num_training_steps: 1000000
+    num_warmup_steps: 1000
+    num_training_steps: 50000
 
     lr: 0.00005
-    final_lr: 0.000005
+    final_lr: 0.000016
 
     betas: [0.9, 0.95]
     eps: 0.00000001
@@ -40,7 +40,7 @@ lower_acc_bound: 0.90
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
-base_alpha: 5.0
+base_alpha: 10.0
 alpha_steps: 20000
 
 kl_weight_threshold: 0.1
