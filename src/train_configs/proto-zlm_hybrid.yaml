@@ -32,16 +32,16 @@ init_hooked: false
 init_hooked_steps: 0
 
 acc_hook: 0.75
-hook_warmup_steps: 5000
+hook_warmup_steps: 1000
 
-upper_acc_bound: 0.95
-lower_acc_bound: 0.90
+upper_acc_bound: 0.80
+lower_acc_bound: 0.70
 
 upper_lm_bound: 0.75
 lower_lm_bound: 0.50
 
 base_alpha: 10.0
-alpha_steps: 20000
+alpha_steps: 10000
 
 kl_weight_threshold: 0.1
 kl_scale: 0.1

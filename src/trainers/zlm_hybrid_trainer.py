@@ -34,7 +34,7 @@ class ZLmHybridTrainer(BaseTrainer):
                 min(1.0, self.hooked_steps / self.alpha_steps) * np.pi - (np.pi / 2)
             ) + 1
         ) / 2
-        alpha = alpha_prog * np.sqrt(
+        alpha = 1e-7 + alpha_prog * np.sqrt(
             self.base_alpha
             * 2 / (model.total_latent_size * model.z_length / model.output_length)
         )
@@ -152,20 +152,23 @@ class ZLmHybridTrainer(BaseTrainer):
         )
 
         # get the latent usage
-        p_kl = kl.mean(0) / (kl.mean(0).sum() + 1e-7)
-        results.effective_parties = (1 / (p_kl ** 2).sum().item()) / p_kl.numel()
+        try:
+            p_kl = kl.mean(0) / (kl.mean(0).sum() + 1e-7)
+            results.effective_parties = (1 / (p_kl ** 2).sum().item()) / p_kl.numel()
 
-        p_true_kl = kl_true.mean(0) / (kl_true.mean(0).sum() + 1e-7)
-        results.effective_parties_true = (1 / (p_true_kl ** 2).sum().item()) / p_true_kl.numel()
+            p_true_kl = kl_true.mean(0) / (kl_true.mean(0).sum() + 1e-7)
+            results.effective_parties_true = (1 / (p_true_kl ** 2).sum().item()) / p_true_kl.numel()
 
-        p_mean_kl = kl_mean.mean(0) / (kl_mean.mean(0).sum() + 1e-7)
-        results.effective_parties_mean = (1 / (p_mean_kl ** 2).sum().item()) / p_mean_kl.numel()
+            p_mean_kl = kl_mean.mean(0) / (kl_mean.mean(0).sum() + 1e-7)
+            results.effective_parties_mean = (1 / (p_mean_kl ** 2).sum().item()) / p_mean_kl.numel()
 
-        p_mean_true_kl = kl_mean_true.mean(0) / (kl_mean_true.mean(0).sum() + 1e-7)
-        results.effective_parties_mean_true = (1 / (p_mean_true_kl ** 2).sum().item()) / p_mean_true_kl.numel()
+            p_mean_true_kl = kl_mean_true.mean(0) / (kl_mean_true.mean(0).sum() + 1e-7)
+            results.effective_parties_mean_true = (1 / (p_mean_true_kl ** 2).sum().item()) / p_mean_true_kl.numel()
 
-        p_mean_extra_kl = kl_mean_extra.mean(0) / (kl_mean_extra.mean(0).sum() + 1e-7)
-        results.effective_parties_mean_extra = (1 / (p_mean_extra_kl ** 2).sum().item()) / p_mean_extra_kl.numel()
+            p_mean_extra_kl = kl_mean_extra.mean(0) / (kl_mean_extra.mean(0).sum() + 1e-7)
+            results.effective_parties_mean_extra = (1 / (p_mean_extra_kl ** 2).sum().item()) / p_mean_extra_kl.numel()
+        except ZeroDivisionError:
+            pass
 
         if step % self.log_image_interval == 0:
 
