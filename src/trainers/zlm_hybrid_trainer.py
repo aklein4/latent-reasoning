@@ -132,6 +132,8 @@ class ZLmHybridTrainer(BaseTrainer):
         kl_val_per_token = (kl.mean(0) * clipped_kl_weights).sum() / model.output_length
         kl_val_multiplier = results.kl_per_token / (1e-7 + kl_val_per_token)
         final_kl_weights = clipped_kl_weights * kl_val_multiplier.detach().item()
+        if self.ignore_kl_weights:
+            final_kl_weights = torch.ones_like(final_kl_weights)
 
         kl_to_loss = (
             scale_gradient(model_out.encoder_mus_base, final_kl_weights[None, :, None, :].detach()) -
