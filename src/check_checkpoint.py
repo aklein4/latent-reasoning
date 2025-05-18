@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 # CHECKPOINT = 'local_data/proto-zlm_asym-beta/000000042500'
 # CHECKPOINT = 'local_data/proto-zlm_asym-beta-grad/000000005000'
 # CHECKPOINT = 'local_data/proto-zlm_hybrid-alpha/000000045000'
-CHECKPOINT = 'local_data/proto-zlm_hybrid-cosine-easy/000000062500'
+# CHECKPOINT = 'local_data/proto-zlm_hybrid-cosine-easy/000000062500'
+CHECKPOINT = 'local_data/proto-zlm_hybrid-cosine-easy-no-weight/000000045000'
 
 
 def slerp(val, low, high):
@@ -61,7 +62,7 @@ def main():
 
     output = model.sample(
         tokens,
-        temperature=0.75,
+        temperature=0.9,
     )
 
     kl = (
