@@ -1,0 +1,36 @@
+trainer_type: ibml
+
+dataset:
+    name: fineweb-edu-TinyLlama
+    branch: main
+
+    type: masked
+    kwargs:
+        sequence_length: 1024
+        pad_token_id: 0
+
+bs: 64
+num_epochs: 1
+
+optimizer_type: adamw
+optimizer_kwargs:
+
+    num_warmup_steps: 1000
+    num_training_steps: 50000
+
+    lr: 0.00005
+    final_lr: 0.000049
+
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.01
+
+    grad_clip: 3.0
+
+checkpoint_interval: 2500
+save_optimizer: false
+
+max_beta: 0.9
+beta_steps: 50000
+
+val_interval: 5

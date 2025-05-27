@@ -153,12 +153,17 @@ class BaseTrainer:
 
                         f.write("\n === GRADIENTS === \n\n")
                         for n, p in model.named_parameters():
-                            if p.grad is not None:
+                            if p.grad is not None and torch.all(p.grad.isfinite()):
                                 f.write(f"{n}\n")
 
                         f.write("\n === NO GRADIENT === \n\n")
                         for n, p in model.named_parameters():
                             if p.grad is None:
+                                f.write(f"{n}\n")
+
+                        f.write("\n === NaN === \n\n")
+                        for n, p in model.named_parameters():
+                            if p.grad is not None and torch.any(~p.grad.isfinite()):
                                 f.write(f"{n}\n")
 
                 # perform a single optimizer step

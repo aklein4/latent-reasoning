@@ -7,6 +7,7 @@ from trainers.zlm_full_trainer import ZLmFullTrainer
 from trainers.zlm_contrast_trainer import ZLmContrastTrainer
 from trainers.zlm_asym_trainer import ZLmAsymTrainer
 from trainers.zlm_hybrid_trainer import ZLmHybridTrainer
+from trainers.ibml_trainer import IBMLTrainer
 
 
 TRAINER_DICT = {
@@ -17,4 +18,5 @@ TRAINER_DICT = {
     "zlm_contrast": ZLmContrastTrainer,
     "zlm_asym": ZLmAsymTrainer,
     "zlm_hybrid": ZLmHybridTrainer,
+    "ibml": IBMLTrainer,
 }

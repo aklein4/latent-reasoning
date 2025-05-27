@@ -7,6 +7,7 @@ from models.zae import ZAEConfig, ZAEModel
 from models.zlm_full import ZLmFullConfig, ZLmFullModel
 from models.zlm_contrast import ZLmContrastConfig, ZLmContrastModel
 from models.zlm_hybrid import ZLmHybridConfig, ZLmHybridModel
+from models.ibml import IBMLConfig, IBMLModel
 
 
 CONFIG_DICT = {
@@ -17,6 +18,7 @@ CONFIG_DICT = {
     "zlm_full": ZLmFullConfig,
     "zlm_contrast": ZLmContrastConfig,
     "zlm_hybrid": ZLmHybridConfig,
+    "ibml": IBMLConfig,
 }
 
 
@@ -28,6 +30,7 @@ MODEL_DICT = {
     "zlm_full": ZLmFullModel,
     "zlm_contrast": ZLmContrastModel,
     "zlm_hybrid": ZLmHybridModel,
+    "ibml": IBMLModel,
 }
 
 

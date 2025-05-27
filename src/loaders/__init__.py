@@ -2,10 +2,12 @@
 
 from loaders.split import SplitCollator
 from loaders.zae import ZAECollator
+from loaders.masked import MaskedCollator
 
 COLLATOR_DICT = {
     "split": SplitCollator,
     "zae": ZAECollator,
+    "masked": MaskedCollator,
 }
 
 

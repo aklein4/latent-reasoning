@@ -1,0 +1,7 @@
+
+model_type: ibml
+architectures: [
+    IBMLModel
+]
+
+base_url: TinyLlama/TinyLlama_v1.1

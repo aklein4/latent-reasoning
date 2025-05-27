@@ -35,6 +35,26 @@ def scale_gradient(x, scale):
     return _ScaleGradient.apply(x, scale)
 
 
+class _PrintGradient(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x, name):
+        ctx.name = name
+        return x
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.name is not None:
+            print(f"{ctx.name}:")
+        else:
+            print("Gradient:")
+        print(grad_output.abs().mean(-1))
+        return grad_output, None
+
+def print_gradient(x, name=None):
+    return _PrintGradient.apply(x, name)
+
+
 def unsqueeze_to_batch(x, target):
     while x.dim() < target.dim():
         x = x[None]
