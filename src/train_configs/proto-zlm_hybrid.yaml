@@ -43,6 +43,7 @@ lower_lm_bound: 0.50
 base_alpha: 10.0
 alpha_steps: 10000
 
+ignore_kl_weights: false
 kl_weight_threshold: 0.1
 kl_scale: 0.1
 
