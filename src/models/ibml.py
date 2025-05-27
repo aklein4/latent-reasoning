@@ -65,11 +65,14 @@ class IBMLMechanism(nn.Module):
         self.V = nn.Linear(hidden_size, hidden_size, bias=False)
         self.O = nn.Linear(hidden_size, hidden_size, bias=False)
 
-        self.w = nn.Parameter(torch.ones(hidden_size, hidden_size) / math.sqrt(hidden_size))
+        self.w = nn.Parameter(torch.zeros(hidden_size, hidden_size))
 
         self.norm = LlamaRMSNorm(hidden_size, eps=eps)
 
-    
+        # copy K from Q for better init from pretrained models
+        self.K.weight.data = self.Q.weight.data.clone().detach()
+
+
     def forward(
         self,
         hidden_states: torch.FloatTensor,
@@ -82,14 +85,16 @@ class IBMLMechanism(nn.Module):
         memory_mask = memory_mask.view(-1, 1) if memory_mask is not None else 1.0
 
         q = self.Q(hidden_states)
-        k = self.K(memory_states) * memory_mask / math.sqrt(self.hidden_size)
+        k = self.K(memory_states) * memory_mask
         v = self.V(memory_states) * memory_mask
 
         mat = k.T @ v
         if prev_mat is not None:
             mat = mat_beta * prev_mat + (1 - mat_beta) * mat
 
-        result = F.linear(q, self.w * mat)
+        w = 1 + F.elu(self.w * math.sqrt(self.hidden_size))
+
+        result = F.linear(q, w * mat)
 
         return self.O(self.norm(result)), mat
 
@@ -202,6 +207,11 @@ class IBMLDecoder(LlamaModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    
+    # overwrite to prevent overwriting the base model weights
+    def init_weights(self):
+        return
 
 
     def forward(
