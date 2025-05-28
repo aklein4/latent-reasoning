@@ -14,7 +14,17 @@ class IBMLTrainer(BaseTrainer):
     val_results = None
     seen_tokens = 0
 
+    hooked = False
+    hooked_steps = 0
     
+
+    def _exponential_decay(self, step, max_steps, min_value):
+        return max(
+            math.exp(step * math.log(min_value) / max_steps),
+            min_value
+        )
+
+
     def _lm_metrics(self, logits, x, mask):
         logits = logits[:, :-1]
         x = x[:, 1:]
@@ -37,10 +47,16 @@ class IBMLTrainer(BaseTrainer):
         input_ids, val_ids = torch.chunk(input_ids, 2, dim=0)
         mask, val_mask = torch.chunk(mask, 2, dim=0)
 
+        help_scale = self._exponential_decay(
+            self.hooked_steps, self.help_steps, self.min_help_scale
+        )
+        if self.hooked_steps >= self.help_steps:
+            help_scale = None
+        model.set_help_scale(help_scale)
+
         min_res = 1 - self.max_beta
-        mat_beta = 1 - max(
-            math.exp(step * math.log(min_res) / self.beta_steps),
-            min_res,
+        mat_beta = 1 - self._exponential_decay(
+            self.hooked_steps, self.beta_steps, min_res
         )
 
         # get model predictions
@@ -59,11 +75,21 @@ class IBMLTrainer(BaseTrainer):
             input_ids,
             mask,
         )
+        results.help_scale = help_scale if help_scale is not None else 0.0
         results.mat_beta = mat_beta
         results.seen_tokens = self.seen_tokens
 
+        if not self.hooked:
+            if results.lm_acc > self.hook_acc:
+                self.hooked = True
+        if self.hooked:
+            self.hooked_steps += 1
+        results.hooked = 1.0 if self.hooked else 0.0
+
         if step == 0 or step % self.val_interval == 0:
             with torch.no_grad():
+
+                model.set_help_scale(None)
 
                 val_out = model(
                     val_ids,

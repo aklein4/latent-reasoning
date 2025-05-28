@@ -30,6 +30,11 @@ optimizer_kwargs:
 checkpoint_interval: 2500
 save_optimizer: false
 
+hook_acc: 0.75
+
+min_help_scale: 0.01
+help_steps: 10000
+
 max_beta: 0.9
 beta_steps: 50000
 

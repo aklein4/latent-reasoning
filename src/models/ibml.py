@@ -69,8 +69,7 @@ class IBMLMechanism(nn.Module):
 
         self.norm = LlamaRMSNorm(hidden_size, eps=eps)
 
-        # copy K from Q for better init from pretrained models
-        self.K.weight.data = self.Q.weight.data.clone().detach()
+        self.help_scale = None
 
 
     def forward(
@@ -81,20 +80,33 @@ class IBMLMechanism(nn.Module):
         prev_mat: Optional[torch.FloatTensor] = None,
         mat_beta: Optional[float] = 0.0,
     ):
-        memory_states = memory_states.view(-1, memory_states.shape[-1])
-        memory_mask = memory_mask.view(-1, 1) if memory_mask is not None else 1.0
 
         q = self.Q(hidden_states)
-        k = self.K(memory_states) * memory_mask
-        v = self.V(memory_states) * memory_mask
-
-        mat = k.T @ v
-        if prev_mat is not None:
-            mat = mat_beta * prev_mat + (1 - mat_beta) * mat
+        k = self.K(memory_states) * memory_mask[..., None]
+        v = self.V(memory_states) * memory_mask[..., None]
 
         w = 1 + F.elu(self.w * math.sqrt(self.hidden_size))
 
+        k_flat = k.view(-1, k.shape[-1])
+        v_flat = v.view(-1, v.shape[-1])
+
+        mat = v_flat.T @ k_flat 
+        if prev_mat is not None:
+            mat = mat_beta * prev_mat + (1 - mat_beta) * mat
+
         result = F.linear(q, w * mat)
+
+        if self.help_scale is not None:
+
+            v_T = torch.swapdims(v, -1, -2)
+            q_T = torch.swapdims(q, -1, -2)
+
+            mat_help = torch.einsum("bdl,blk->bdk", v_T, k) * w[None]
+            
+            results_help = torch.einsum("bkd,bdl->bkl", mat_help, q_T)
+            results_help = torch.swapdims(results_help, -1, -2)
+
+            result = (1 - self.help_scale) * result + self.help_scale * results_help
 
         return self.O(self.norm(result)), mat
 
@@ -398,6 +410,12 @@ class IBMLModel(PreTrainedModel):
         return
 
     
+    def set_help_scale(self, help_scale):
+        for m in self.modules():
+            if isinstance(m, IBMLMechanism):
+                m.help_scale = help_scale
+
+    
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -407,7 +425,7 @@ class IBMLModel(PreTrainedModel):
     ):
 
         memory_states = self.encoder(input_ids=input_ids).last_hidden_state
-        memory_states = memory_states.reshape(-1, memory_states.shape[-1])
+        # memory_states = memory_states.reshape(-1, memory_states.shape[-1])
 
         outputs = self.decoder(
             input_ids=input_ids,
