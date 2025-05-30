@@ -9,12 +9,9 @@ base_url: TinyLlama/TinyLlama_v1.1
 in_length: 128
 out_length: 128
 
-z_length: 512
+z_length: 256
 
-latent_size_per_layer: 8
-num_latent_layers: 16
+latent_size: 256
 
-target_length: 32
-target_size: 128
+fix_embeddings: true
 
-output_head_size: 8192

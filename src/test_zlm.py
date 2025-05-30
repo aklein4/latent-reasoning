@@ -25,14 +25,11 @@ def main():
         size=(3, model.output_length),
         dtype=torch.long
     ).to(constants.DEVICE)
-    target = torch.randn(
-        (3, model.target_length, model.target_size)
-    ).to(constants.DEVICE)
 
     print("Running model...")
     with torch.autocast("cuda", torch.bfloat16):
-        out = model(input_ids, output_ids, target)
-        loss = out.output.mean()
+        out = model(input_ids, output_ids, alpha=0.5)
+        loss = out.lm_logits.mean() + (out.encoder_mus - out.decoder_mus).mean()
         print(loss.item())
     loss.backward()
     print("Model run complete!")
