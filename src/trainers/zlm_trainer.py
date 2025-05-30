@@ -182,9 +182,13 @@ class ZLmTrainer(BaseTrainer):
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
 
+        results.kl_scale = clamped_linear(
+            self.hooked_steps, 0.0, self.kl_scale, self.hook_warmup_steps
+        )
+
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_loss * self.kl_scale
+            results.kl_loss * results.kl_scale
         )
 
         # get the latent usage

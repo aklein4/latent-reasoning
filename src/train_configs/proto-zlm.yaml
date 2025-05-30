@@ -40,6 +40,8 @@ alpha_steps_1: 10000
 base_alpha_2: 0.2
 alpha_steps_2: 50000
 
+hook_warmup_steps: 1000
+
 upper_acc_bound: 0.80
 lower_acc_bound: 0.70
 min_lm_scale: 0.1
