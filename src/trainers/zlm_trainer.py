@@ -173,14 +173,10 @@ class ZLmTrainer(BaseTrainer):
         if self.ignore_kl_weights:
             final_kl_weights = torch.ones_like(final_kl_weights)
 
-        results.kl_scale = clamped_linear(
-            self.hooked_steps, 0.0, self.kl_scale, self.hook_warmup_steps
-        )
-
         loss_kl_base = get_kl(
             scale_gradient(
                 model_out.encoder_mus_base,
-                results.kl_scale * final_kl_weights[None, :, None].detach()
+                final_kl_weights[None, :, None].detach()
             ),
             model_out.generator_mus_base
         )
@@ -188,17 +184,20 @@ class ZLmTrainer(BaseTrainer):
             alpha * model_out.encoder_mus_extra.detach(),
             alpha * model_out.generator_mus_extra
         )
+
         results.kl_loss = (
             get_per_token(loss_kl_base) +
             get_per_token(loss_kl_extra)
         )
-
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
 
+        results.kl_scale = clamped_linear(
+            self.hooked_steps, 0.0, self.kl_scale, self.hook_warmup_steps
+        )
         results.loss = (
             results.lm_loss_scaled +
-            results.kl_loss
+            results.kl_loss * results.kl_scale
         )
 
         # get the latent usage
