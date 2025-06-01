@@ -158,9 +158,9 @@ class ModulatingRMSNorm(nn.Module):
         return (x * scales) + biases
 
 
-class ZLmEncoderLayer(nn.Module):
+class ZLmPrefixLayer(nn.Module):
 
-    def __init__(self, config, zlm_config: ZLmConfig, layer_idx: int):
+    def __init__(self, config, zlm_config: ZLmConfig, layer_idx: int, bi_length: int):
         super().__init__()
 
         self.hidden_size = config.hidden_size
@@ -171,7 +171,7 @@ class ZLmEncoderLayer(nn.Module):
         self.self_attn = LlamaAttention(config=config, layer_idx=layer_idx)
         self.mlp = LlamaMLP(config)
 
-        self.bi_length = zlm_config.input_length + 1 + zlm_config.output_length # +1 for the sep token
+        self.bi_length = bi_length
         self.bi_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.bi_attn = LlamaAttention(config=config, layer_idx=layer_idx)
         self.bi_attn.is_causal = False
@@ -306,9 +306,14 @@ class ZLmModel(PreTrainedModel):
             torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
 
+        # create generator special tokens
+        self.generator_z_tokens = nn.Parameter(
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
+        )
+
         # create decoder special tokens
         self.decoder_z_tokens = nn.Parameter(
-            torch.randn(1 + self.z_length, self.hidden_size) * embed_std + embed_mean
+            torch.randn(self.z_length, self.hidden_size) * embed_std + embed_mean
         )
         self.decoder_start_output_token = nn.Parameter(
             torch.randn(1, self.hidden_size) * embed_std + embed_mean
@@ -317,10 +322,11 @@ class ZLmModel(PreTrainedModel):
         # create the encoder
         self.encoder = LlamaModel(base_model.model.config)
         for i in range(len(self.encoder.layers)):
-            self.encoder.layers[i] = ZLmEncoderLayer(
+            self.encoder.layers[i] = ZLmPrefixLayer(
                 base_model.config,
                 config,
-                layer_idx=i
+                layer_idx=i,
+                bi_length=(self.input_length + 1 + self.output_length) # +1 for the sep token
             )
         
         self.encoder.load_state_dict(
@@ -342,57 +348,81 @@ class ZLmModel(PreTrainedModel):
                 [self.input_length, 1, self.output_length]
             )
         
-        self.encoder_mu_norm = LlamaRMSNorm(
-            self.hidden_size,
-            eps=self.encoder.config.rms_norm_eps
+        self.encoder.norm.weight.data = torch.ones_like(self.encoder.norm.weight.data)
+
+        # create the generator
+        self.generator = LlamaModel(base_model.model.config)
+
+        self.generator.load_state_dict(
+            {k: v.clone().detach() for k, v in base_model.model.state_dict().items()},
+            strict=True
         )
-        self.encoder.norm = nn.Identity()
+
+        for layer in self.generator.layers:
+            layer.input_layernorm = ModulatingRMSNorm(
+                layer.input_layernorm,
+                [self.input_length, self.z_length]
+            )
+            layer.post_attention_layernorm = ModulatingRMSNorm(
+                layer.post_attention_layernorm,
+                [self.input_length, self.z_length]
+            )
+
+        self.generator.norm.weight.data = torch.ones_like(self.generator.norm.weight.data)
 
         # create the decoder
         self.decoder = LlamaModel(base_model.model.config)
+        for i in range(len(self.decoder.layers)):
+            self.decoder.layers[i] = ZLmPrefixLayer(
+                base_model.config,
+                config,
+                layer_idx=i,
+                bi_length=(self.input_length + self.z_length) # +1 for the sep token
+            )
 
         self.decoder.load_state_dict(
             {k: v.clone().detach() for k, v in base_model.model.state_dict().items()},
-            strict=True
+            strict=False
         )
 
         for layer in self.decoder.layers:
             layer.input_layernorm = ModulatingRMSNorm(
                 layer.input_layernorm,
-                [self.input_length, 1 + self.z_length, self.output_length]
+                [self.input_length, self.z_length, self.output_length]
             )
             layer.post_attention_layernorm = ModulatingRMSNorm(
                 layer.post_attention_layernorm,
-                [self.input_length, 1 + self.z_length, self.output_length]
+                [self.input_length, self.z_length, self.output_length]
             )
-
-        self.decoder_lm_norm = self.decoder.norm
-        self.decoder_mu_norm = LlamaRMSNorm(
-            self.hidden_size,
-            eps=self.decoder.config.rms_norm_eps
-        )
-        self.decoder.norm = nn.Identity()
+            layer.bi_layernorm = ModulatingRMSNorm(
+                layer.bi_layernorm,
+                [self.input_length, self.z_length]
+            )
 
         # create the input linears
         self.encoder_noise_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
+        self.generator_z_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
         self.decoder_z_proj_in = nn.Linear(self.latent_size, self.hidden_size, bias=False)
 
         # scale input layers by embedding stats
         self.encoder_noise_proj_in.weight.data *= embed_std[0][..., None]
+        self.generator_z_proj_in.weight.data *= embed_std[0][..., None]
         self.decoder_z_proj_in.weight.data *= embed_std[0][..., None]
 
         # create the output linears
         self.encoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
         self.encoder_mu_extra_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
-        self.decoder_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
+        
+        self.generator_mu_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
+        self.generator_mu_extra_proj_out = nn.Linear(self.hidden_size, self.latent_size, bias=False)
 
         # create the padders
         self.encoder_padder = Padder(
-            (self.input_length + 1 + self.output_length), 0
+            (self.input_length + 1 + self.output_length), 0 # +1 for the sep token
         )
-        self.decoder_padder = Padder(
+        self.generator_padder = Padder(
             prefix_length=self.input_length,
-            suffix_length=(1 + self.output_length), # +1 because last z token output is discarded
+            suffix_length=0,
         )
 
         # Initialize weights and gradient checkpointing
@@ -408,12 +438,16 @@ class ZLmModel(PreTrainedModel):
         self,
         input_ids: torch.LongTensor,
         output_ids: torch.LongTensor,
+        disable_generator: bool = False,
         alpha: float = 0.0,
     ):
         
         # get the input and output tokens
         input_tokens = self.embed_tokens(input_ids)
         output_tokens = self.embed_tokens(output_ids)
+        if disable_generator:
+            input_tokens = input_tokens.detach()
+            output_tokens = output_tokens.detach()
 
         # generate the noise
         noise = torch.randn(
@@ -438,9 +472,7 @@ class ZLmModel(PreTrainedModel):
         encoder_hidden_states = self.encoder(
             inputs_embeds=encoder_hidden_states
         ).last_hidden_state
-        encoder_hidden_states = self.encoder_mu_norm(
-            self.encoder_padder.unpad(encoder_hidden_states)
-        )
+        encoder_hidden_states = self.encoder_padder.unpad(encoder_hidden_states)
 
         # get the encoder outputs
         encoder_mus_base = self.encoder_mu_proj_out(encoder_hidden_states)
@@ -452,12 +484,40 @@ class ZLmModel(PreTrainedModel):
         encoder_mus = encoder_mus_base + alpha * encoder_mus_extra
         z = encoder_mus + noise
 
+        # use the generator
+        if disable_generator:
+            generator_mus_base = torch.zeros_like(encoder_mus)
+            generator_mus_extra = torch.zeros_like(encoder_mus)
+
+        else:
+
+            # get the generator inputs
+            generator_hidden_states = torch.cat(
+                [
+                    input_tokens,
+                    expand_to_batch(self.generator_z_tokens[:1], input_tokens),
+                    expand_to_batch(self.generator_z_tokens[1:], input_tokens) + self.generator_z_proj_in(z[..., :-1, :]),
+                ],
+                dim=-2
+            )
+
+            # pass through the generator
+            generator_hidden_states = self.generator(
+                inputs_embeds=generator_hidden_states,
+            ).last_hidden_state
+            generator_hidden_states = self.generator_padder.unpad(generator_hidden_states)
+
+            # get the generator outputs
+            generator_mus_base = self.generator_mu_proj_out(generator_hidden_states)
+            generator_mus_extra = self.generator_mu_extra_proj_out(generator_hidden_states)
+
+        generator_mus = generator_mus_base + alpha * generator_mus_extra
+
         # get the decoder input
         decoder_hidden_states = torch.cat(
             [
                 input_tokens,
-                expand_to_batch(self.decoder_z_tokens[:1], output_tokens),
-                expand_to_batch(self.decoder_z_tokens[1:], output_tokens) + self.decoder_z_proj_in(z),
+                expand_to_batch(self.decoder_z_tokens, output_tokens) + self.decoder_z_proj_in(z),
                 expand_to_batch(self.decoder_start_output_token, output_tokens),
                 output_tokens[..., :-1, :],
             ],
@@ -468,25 +528,19 @@ class ZLmModel(PreTrainedModel):
             inputs_embeds=decoder_hidden_states,
         ).last_hidden_state
 
-        decoder_mus = self.decoder_mu_proj_out(
-            self.decoder_mu_norm(
-                self.decoder_padder.unpad(decoder_hidden_states)
-            )
-        )
-
         # get the output logits
         lm_logits = self.lm_head(
-            self.decoder_lm_norm(
-                decoder_hidden_states[..., -self.output_length:, :]
-            )
+            decoder_hidden_states[..., -self.output_length:, :]
         )
         lm_logits = F.log_softmax(lm_logits, dim=-1)
 
         return DotDict(
             encoder_mus=encoder_mus,
-            decoder_mus=decoder_mus,
             encoder_mus_base=encoder_mus_base,
             encoder_mus_extra=encoder_mus_extra,
+            generator_mus=generator_mus,
+            generator_mus_base=generator_mus_base,
+            generator_mus_extra=generator_mus_extra,
             lm_logits=lm_logits,
             z=z,
         )

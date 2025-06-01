@@ -7,7 +7,7 @@ dataset:
     type: split
     kwargs: {}
 
-bs: 128
+bs: 64
 num_epochs: 1
 
 optimizer_type: adamw
@@ -31,10 +31,7 @@ save_optimizer: false
 init_hooked: false
 init_hooked_steps: 0
 
-acc_rolling_beta: 0.9
-kl_rolling_beta: 0.9
-
-base_alpha_1: 10.0
+base_alpha_1: 5.0
 alpha_steps_1: 10000
 
 base_alpha_2: 0.2

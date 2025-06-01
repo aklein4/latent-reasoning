@@ -29,7 +29,7 @@ def main():
     print("Running model...")
     with torch.autocast("cuda", torch.bfloat16):
         out = model(input_ids, output_ids, alpha=0.5)
-        loss = out.lm_logits.mean() + (out.encoder_mus - out.decoder_mus).mean()
+        loss = out.lm_logits.mean() + (out.encoder_mus - out.generator_mus).mean()
         print(loss.item())
     loss.backward()
     print("Model run complete!")
