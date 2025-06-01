@@ -31,7 +31,7 @@ save_optimizer: false
 init_hooked: false
 init_hooked_steps: 0
 
-base_alpha_1: 5.0
+base_alpha_1: 10.0
 alpha_steps_1: 10000
 
 base_alpha_2: 0.2
