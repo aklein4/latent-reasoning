@@ -184,14 +184,14 @@ class ZLmTrainer(BaseTrainer):
             ),
             model_out.generator_mus_base
         )
-        loss_kl_true = get_kl(
-            model_out.encoder_mus.detach(),
-            model_out.generator_mus_base.detach() + alpha * model_out.generator_mus_extra
+        loss_kl_extra = get_kl(
+            alpha * model_out.encoder_mus_extra.detach(),
+            alpha * model_out.generator_mus_extra
         )
         results.kl_loss = (
             get_per_token(loss_kl_base) +
-            get_per_token(loss_kl_true)
-        ) / 2
+            get_per_token(loss_kl_extra)
+        )
 
         if not self.hooked:
             results.kl_loss = results.kl_loss.detach()
