@@ -43,7 +43,17 @@ class IBMLTrainer(BaseTrainer):
         )
 
 
+    inited = False
+
+    def special_init(self):
+        self.hooked = self.init_hooked
+        self.hooked_steps = self.init_hooked_steps
+
+
     def train_step(self, step, model, input_ids, mask):
+        if not self.inited:
+            self.special_init()
+
         input_ids, val_ids = torch.chunk(input_ids, 2, dim=0)
         mask, val_mask = torch.chunk(mask, 2, dim=0)
 
@@ -54,10 +64,13 @@ class IBMLTrainer(BaseTrainer):
             help_scale = None
         model.set_help_scale(help_scale)
 
-        min_res = 1 - self.max_beta
-        mat_beta = 1 - self._exponential_decay(
-            self.hooked_steps, self.beta_steps, min_res
-        )
+        if isinstance(self.max_beta, str):
+            mat_beta = self.max_beta
+        else:
+            min_res = 1 - self.max_beta
+            mat_beta = 1 - self._exponential_decay(
+                self.hooked_steps, self.beta_steps, min_res
+            )
 
         # get model predictions
         model_out = model(

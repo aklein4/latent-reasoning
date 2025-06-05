@@ -92,6 +92,13 @@ class IBMLMechanism(nn.Module):
 
         mat = v_flat.T @ k_flat 
         if prev_mat is not None:
+
+            if isinstance(mat_beta, str):
+                if mat_beta == "avg":
+                    mat = mat + prev_mat
+                else:
+                    raise ValueError("Invalid mat_beta value. Use 'avg' or a float.")
+                
             mat = mat_beta * prev_mat + (1 - mat_beta) * mat
 
         result = F.linear(q, w * mat)
