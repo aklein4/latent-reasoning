@@ -99,7 +99,7 @@ class IBMLMechanism(nn.Module):
                 else:
                     raise ValueError("Invalid mat_beta value. Use 'avg' or a float.")
 
-            else  
+            else:
                 mat = mat_beta * prev_mat + (1 - mat_beta) * mat
 
         result = F.linear(q, w * mat)
