@@ -41,4 +41,4 @@ help_steps: 10000
 max_beta: avg
 beta_steps: 50000
 
-val_interval: 5
+val_interval: 1
