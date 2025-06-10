@@ -31,12 +31,12 @@ checkpoint_interval: 999999
 save_optimizer: false
 
 init_hooked: true
-init_hooked_steps: 999999
+init_hooked_steps: 1
 
 hook_acc: 0.75
 
 min_help_scale: 0.01
-help_steps: 10000
+help_steps: 1000
 
 max_beta: avg
 beta_steps: 50000

@@ -53,6 +53,7 @@ class IBMLTrainer(BaseTrainer):
     def train_step(self, step, model, input_ids, mask):
         if not self.inited:
             self.special_init()
+        self.inited = True
 
         input_ids, val_ids = torch.chunk(input_ids, 2, dim=0)
         mask, val_mask = torch.chunk(mask, 2, dim=0)
@@ -98,6 +99,7 @@ class IBMLTrainer(BaseTrainer):
         if self.hooked:
             self.hooked_steps += 1
         results.hooked = 1.0 if self.hooked else 0.0
+        results.hooked_steps = self.hooked_steps
 
         if step == 0 or step % self.val_interval == 0:
             with torch.no_grad():
