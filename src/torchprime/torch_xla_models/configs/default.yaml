@@ -1,0 +1,78 @@
+# The default config file. You may override configs with `key=value` arguments on the CLI
+# according to https://hydra.cc/docs/advanced/override_grammar/basic/.
+
+# This defines the order in which configs are loaded. The latter configs
+# override the earlier ones.
+defaults:
+  - _self_ # refers to this config file
+  - model: llama-3-8b # refers to model/llama-3-8b.yaml
+
+dataset_name: wikitext
+dataset_config_name: wikitext-2-raw-v1
+global_batch_size: 4
+logging_steps: 10
+max_steps: 15
+block_size: 8192
+cache_dir: /tmp/
+seed: 42
+profile_step: 2
+
+# This might be overwritten when using tp run to launch the run using XPK
+profile_dir: profile
+profile_duration: 100000
+
+# This might be overwritten when using tp run to launch the run using XPK
+output_dir: outputs
+
+torch_dtype: bfloat16
+optimizer:
+  type: adafactor
+  learning_rate: 5.e-5
+lr_scheduler:
+  type: linear
+  warmup_steps: 0
+
+# The virtual device mesh shape to use within a TPU slice. This is also called
+# the "ICI mesh", since devices within a slice enjoy a faster network called
+# "Inter-Chip Interconnect".
+ici_mesh:
+  data: 1
+  fsdp: 4
+  tensor: 1
+  expert: 1
+
+# Shape of the logical mesh where each element is a TPU slice. This is called
+# "Data Center Network (DCN) mesh" because TPU slices are usually connected
+# together with slower data center networking, with the faster ICI network
+# used within a slice.
+#
+# As an example, to enable 2-way data parallelism across 2 TPU slices, you may
+# specify `dcn_mesh.data=2`.
+dcn_mesh:
+  data: 1
+  fsdp: 1
+  tensor: 1
+  expert: 1
+
+# These are default values for model activation rematerialization configuration.
+# They can be overridden on the command line or by importing one of the presets
+# in the `model/remat` directory.
+model:
+  remat:
+    # The class names of model layers whose intermediate activations should be
+    # recomputed during the backward pass (i.e. activation checkpointing).
+    activation_checkpoint_layers: []
+
+    # If not null, compile a module of type `HomogeneousSequential` located at the
+    # given path in the module tree using `torch_xla.experimental.scan_layers`.
+    scan_layers: null
+
+    # If specified, offload these tensors to host RAM during the forward pass and
+    # move them back during the backward pass.
+    #
+    # The tensors to be offloaded should be given a name by wrapping them with the
+    # `torchprime.torch_xla_models.offloading.offload_name` call. Then the same
+    # name could be specified here to offload that tensor.
+    #
+    # Currently in order to offload tensors, `scan_layers` must also be enabled.
+    offload_tensors: []
