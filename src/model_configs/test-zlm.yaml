@@ -10,5 +10,6 @@ in_length: 5
 out_length: 7
 
 z_length: 11
+latent_size: 17
 
-latent_size: 53
+fix_embeddings: true

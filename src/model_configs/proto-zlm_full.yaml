@@ -1,0 +1,18 @@
+
+model_type: zlm_full
+architectures: [
+    ZLmFullModel
+]
+
+base_url: TinyLlama/TinyLlama_v1.1
+
+in_length: 128
+out_length: 128
+
+z_length: 256
+
+latent_size_per_layer: 16
+num_latent_layers: 16
+
+mu_init_scale: 0.0
+small_init_scale: 0.01

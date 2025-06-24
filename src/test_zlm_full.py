@@ -1,36 +1,34 @@
 import torch
 
-from models.zlm import ZLmConfig, ZLmModel
+from models.zlm_full import ZLmFullConfig, ZLmFullModel
 from utils.config_utils import load_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-zlm'
+MODEL_CONFIG = 'test-zlm-full'
 
 
 def main():
 
     print("loading model...")
     config = load_config(MODEL_CONFIG, "model")
-    model = ZLmModel(ZLmConfig(**config)).to(constants.DEVICE)
+    model = ZLmFullModel(ZLmFullConfig(**config), cpu=True)
     print("Model loaded!")
 
     input_ids = torch.randint(
         0, 100,
         size=(3, model.input_length),
         dtype=torch.long
-    ).to(constants.DEVICE)
+    )
     output_ids = torch.randint(
         0, 100,
         size=(3, model.output_length),
         dtype=torch.long
-    ).to(constants.DEVICE)
+    )
 
     print("Running model...")
-    with torch.autocast("cuda", torch.bfloat16):
-        out = model(input_ids, output_ids, alpha=0.5)
-        loss = out.lm_logits.mean() + (out.encoder_mus - out.generator_mus).mean()
-        print(loss.item())
+    out = model(input_ids, output_ids)
+    loss = out.lm_logits.mean() + (out.encoder_mus - out.generator_mus).mean()
     loss.backward()
     print("Model run complete!")
 

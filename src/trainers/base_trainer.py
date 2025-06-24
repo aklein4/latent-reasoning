@@ -22,6 +22,8 @@ class BaseTrainer:
         config: dict,
         debug: Optional[bool] = False,
         notes: Optional[str] = None,
+        resume_id: Optional[str] = None,
+        resume_step: Optional[int] = None,
     ):
         """ A trainer to train models using PyTorch.
 
@@ -47,6 +49,7 @@ class BaseTrainer:
                 name=name,
                 config=config,
                 notes=notes,
+                fork_from=f"{resume_id}?_step={resume_step}" if resume_id is not None else None,
             )
 
         # apply hyperparams
@@ -144,6 +147,19 @@ class BaseTrainer:
                     )
 
                 results.loss.backward()
+
+                if curr_step == 0:
+                    with open(os.path.join(constants.LOCAL_DATA_PATH, "gradients.txt"), "w") as f:
+
+                        f.write("\n === GRADIENTS === \n\n")
+                        for n, p in model.named_parameters():
+                            if p.grad is not None:
+                                f.write(f"{n}\n")
+
+                        f.write("\n === NO GRADIENT === \n\n")
+                        for n, p in model.named_parameters():
+                            if p.grad is None:
+                                f.write(f"{n}\n")
 
                 # perform a single optimizer step
                 if "reset_optimizer" in results.keys():

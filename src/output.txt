@@ -1,0 +1,15 @@
+
+ === INPUT === 
+
+<s> Minecraft is a 3D sandbox video game that has no required goals to accomplish, allowing players a large amount of freedom in choosing how to play the game.[3] The game also features an optional achievement system.[4] Gameplay is in the first-person perspective by default, but players have the option of a second and third-person perspective.[5] The game world is composed of rough 3D objects—mainly cubes, referred to as blocks—representing various materials, such as dirt, stone, ores, tree trunks, water, and lava. The core game
+
+ === OUTPUT (0) === 
+
+is a 3D world that has no restrictions on the player or their abilities.
+Minecraft is a game that can be played through a variety of different adventures, such as a fantasy, gaming, and survival game. The game features a variety of puzzles and little missions that players can play with up to 25 players.
+At the beginning of the game, players will be able to use their own skills as they explore the world of Minecraft. However, it is not enough for the player to just be a 3D player, but to be the best player in the world
+
+ === OUTPUT (1) === 
+
+is an exploration and survival game, where the player plays the role of a boy who gets into a sandbox setting, which is represented by the land, in a sandbox environment. The boy is the Owner of the land, and his quest is to survive as long as possible.
+Minecraft is an online, sandbox video game. The game is currently available for several different platforms, including the PlayStation 4, Xbox One, Nintendo Switch, and the Nintendo Switch, and the PlayStation Vita, Xbox 360, and Nintendo 3DS. The game

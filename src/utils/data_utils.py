@@ -23,7 +23,8 @@ def load_byte_array(
 
 def get_hf_files(
     hf_id: str,
-    name: str
+    name: str,
+    branch: str = "main",
 ):
     """ Get datafile urls for the given dataset name.
      - see example at https://huggingface.co/docs/hub/en/datasets-webdataset 
@@ -38,6 +39,6 @@ def get_hf_files(
     data_files = {}
     for split in ["train", "val", "test"]:
 
-        data_files[split] = f"https://huggingface.co/datasets/{hf_id}/{name}/resolve/main/{split}/*"
+        data_files[split] = f"https://huggingface.co/datasets/{hf_id}/{name}/resolve/{branch}/{split}/*"
     
     return data_files

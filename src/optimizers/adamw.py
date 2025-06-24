@@ -43,6 +43,7 @@ class AdamW(torch.optim.Optimizer):
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-6,
         weight_decay: float = 0.0,
+        grad_clip: float = None,
     ):
         if final_lr > lr:
             raise ValueError(f"Invalid final learning rate: {final_lr} - should be <= {lr}")
@@ -61,6 +62,7 @@ class AdamW(torch.optim.Optimizer):
             "betas": betas,
             "eps": eps,
             "weight_decay": weight_decay,
+            "grad_clip": grad_clip,
         }
         
         super().__init__(params, defaults)
@@ -136,7 +138,10 @@ class AdamW(torch.optim.Optimizer):
                 bias_correction2 = 1.0 - beta2 ** state["step"]
                 step_size = step_size * math.sqrt(bias_correction2) / bias_correction1
 
-                p.addcdiv_(exp_avg, denom, value=-step_size)
+                if group["grad_clip"] is None:
+                    p.addcdiv_(exp_avg, denom, value=-step_size)
+                else:
+                    p.add_(torch.clamp(exp_avg / denom, -group["grad_clip"], group["grad_clip"]), alpha=-step_size)
 
                 # Just adding the square of the weights to the loss function is *not*
                 # the correct way of using L2 regularization/weight decay with Adam,

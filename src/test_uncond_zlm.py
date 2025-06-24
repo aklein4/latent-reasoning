@@ -1,18 +1,21 @@
 import torch
 
-from models.zlm import ZLmConfig, ZLmModel
+from models.uncond_zlm import UncondZLmConfig, UncondZLmModel
 from utils.config_utils import load_config
 import utils.constants as constants
 
 
-MODEL_CONFIG = 'test-zlm'
+MODEL_CONFIG = 'test-uncond_zlm'
 
 
 def main():
 
     print("loading model...")
     config = load_config(MODEL_CONFIG, "model")
-    model = ZLmModel(ZLmConfig(**config)).to(constants.DEVICE)
+    model = UncondZLmModel(UncondZLmConfig(**config)).to(constants.DEVICE)
+    model.train()
+    for param in model.parameters():
+        param.requires_grad = True
     print("Model loaded!")
 
     input_ids = torch.randint(
@@ -27,12 +30,16 @@ def main():
     ).to(constants.DEVICE)
 
     print("Running model...")
-    with torch.autocast("cuda", torch.bfloat16):
-        out = model(input_ids, output_ids, alpha=0.5)
-        loss = out.lm_logits.mean() + (out.encoder_mus - out.generator_mus).mean()
-        print(loss.item())
+    with torch.autocast(
+        device_type="cuda",
+        dtype=torch.bfloat16,
+    ):
+        out = model(input_ids, output_ids)
+        print("Model run complete!")
+
+        loss = out.lm_logits.sum() + (out.encoder_mus - out.generator_mus).pow(2).sum(-1).mean()
     loss.backward()
-    print("Model run complete!")
+    print("Loss computed!")
 
     with open("gradients.txt", "w") as f:
 

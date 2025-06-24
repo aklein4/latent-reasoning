@@ -1,4 +1,4 @@
-trainer_type: zlm
+trainer_type: zlm_full
 
 dataset:
     name: fineweb-100BT-split-128
@@ -17,7 +17,7 @@ optimizer_kwargs:
     num_training_steps: 50000
 
     lr: 0.00005
-    final_lr: 0.000049
+    final_lr: 0.000005
 
     betas: [0.9, 0.95]
     eps: 0.00000001
@@ -31,21 +31,20 @@ save_optimizer: false
 init_hooked: false
 init_hooked_steps: 0
 
-base_alpha_1: 5.0
-alpha_steps_1: 10000
-
-base_alpha_2: 0.2
-alpha_steps_2: 50000
-
+acc_hook: 0.75
 hook_warmup_steps: 1000
 
-upper_acc_bound: 0.80
-lower_acc_bound: 0.70
-min_lm_scale: 0.1
+upper_acc_bound: 0.99
+lower_acc_bound: 0.98
 
-acc_hook: 0.75
+upper_lm_bound: 0.75
+lower_lm_bound: 0.50
 
-ignore_kl_weights: false
+running_beta: 0.0
+
+kl_weight_threshold: 0.25
+zero_optimize: true
+
 kl_scale: 0.1
 
 log_image_interval: 100

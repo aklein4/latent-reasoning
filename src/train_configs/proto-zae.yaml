@@ -1,0 +1,35 @@
+trainer_type: zae
+
+dataset:
+    name: fineweb-100BT-split-128
+    branch: split-1
+
+    type: split
+    kwargs: {}
+
+bs: 256
+num_epochs: 1
+
+optimizer_type: adamw
+optimizer_kwargs:
+
+    num_warmup_steps: 1000
+    num_training_steps: 100000
+
+    lr: 0.00005
+    final_lr: 0.000005
+
+    betas: [0.9, 0.95]
+    eps: 0.00000001
+    weight_decay: 0.01
+
+checkpoint_interval: 5000
+save_optimizer: false
+
+upper_p_bound: 0.75
+lower_p_bound: 0.50
+
+hook_acc: 0.5
+
+kl_weight: 0.01
+mean_weight: 0.1

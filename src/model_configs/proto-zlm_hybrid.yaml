@@ -1,7 +1,7 @@
 
-model_type: zlm
+model_type: zlm_hybrid
 architectures: [
-    ZLmModel
+    ZLmHybridModel
 ]
 
 base_url: TinyLlama/TinyLlama_v1.1
@@ -11,7 +11,5 @@ out_length: 128
 
 z_length: 256
 
-latent_size: 256
-
-fix_embeddings: true
-
+latent_size_per_layer: 32
+num_latent_layers: 8
